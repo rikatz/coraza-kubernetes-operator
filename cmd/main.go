@@ -41,6 +41,7 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/controller"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/xds"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -81,6 +82,7 @@ func main() {
 	var cacheMaxAge time.Duration
 	var cacheMaxSize int
 	var cacheServerPort int
+	var xdsServerPort int
 	var envoyClusterName string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -98,6 +100,7 @@ func main() {
 	flag.DurationVar(&cacheMaxAge, "cache-max-age", cache.CacheMaxAge, "Maximum age of a cache entry before it's considered stale in the RuleSet cache")
 	flag.IntVar(&cacheMaxSize, "cache-max-size", cache.CacheMaxSize, fmt.Sprintf("Maximum total size of all cached rules in the RuleSet cache in bytes (default %dMB)", cache.CacheMaxSize/(1024*1024)))
 	flag.IntVar(&cacheServerPort, "cache-server-port", controller.DefaultRuleSetCacheServerPort, fmt.Sprintf("Port number for the RuleSet cache server to listen on (default %d)", controller.DefaultRuleSetCacheServerPort))
+	flag.IntVar(&xdsServerPort, "xds-server-port", 18000, "Port number for the xDS server to listen on")
 	flag.StringVar(&envoyClusterName, "envoy-cluster-name", "", "The Envoy cluster name pointing to the RuleSet cache server (required)")
 
 	opts := zap.Options{
@@ -210,6 +213,13 @@ func main() {
 	cacheServer := cache.NewServer(rulesetCache, fmt.Sprintf(":%d", cacheServerPort), ctrl.Log, cacheGC)
 	if err := mgr.Add(cacheServer); err != nil {
 		setupLog.Error(err, "unable to add cache server to manager")
+		os.Exit(1)
+	}
+
+	// set up xDS server
+	xdsServer := xds.NewServer(rulesetCache, xdsServerPort, ctrl.Log)
+	if err := mgr.Add(xdsServer); err != nil {
+		setupLog.Error(err, "unable to add xDS server to manager")
 		os.Exit(1)
 	}
 

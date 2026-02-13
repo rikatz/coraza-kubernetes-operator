@@ -36,7 +36,7 @@ all: build
 # ------------------------------------------------------------------------------
 
 .PHONY: build
-build: manifests generate fmt vet lint
+build: manifests generate proto fmt vet lint
 	go build -o bin/manager cmd/main.go
 
 .PHONY: build.image
@@ -91,6 +91,18 @@ manifests: controller-gen
 .PHONY: generate
 generate: controller-gen
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
+
+.PHONY: proto
+proto: protoc protoc-gen-go protoc-gen-go-grpc
+	"$(PROTOC)" \
+		--proto_path=api/xds/v1 \
+		--go_out=pkg/xds/v1 \
+		--go_opt=paths=source_relative \
+		--go-grpc_out=pkg/xds/v1 \
+		--go-grpc_opt=paths=source_relative \
+		--plugin=protoc-gen-go="$(PROTOC_GEN_GO)" \
+		--plugin=protoc-gen-go-grpc="$(PROTOC_GEN_GO_GRPC)" \
+		api/xds/v1/ruleset.proto
 
 .PHONY: fmt
 fmt:
@@ -166,11 +178,17 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 SETUP_ENVTEST ?= $(LOCALBIN)/setup-envtest
+PROTOC ?= $(LOCALBIN)/protoc
+PROTOC_GEN_GO ?= $(LOCALBIN)/protoc-gen-go
+PROTOC_GEN_GO_GRPC ?= $(LOCALBIN)/protoc-gen-go-grpc
 
 KUSTOMIZE_VERSION ?= v5.7.1
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 GOLANGCI_LINT_VERSION ?= v2.5.0
 SETUP_ENVTEST_VERSION ?= latest
+PROTOC_VERSION ?= 29.5
+PROTOC_GEN_GO_VERSION ?= v1.36.5
+PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE)
@@ -191,6 +209,35 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 setup-envtest: $(SETUP_ENVTEST)
 $(SETUP_ENVTEST): $(LOCALBIN)
 	$(call go-install-tool,$(SETUP_ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(SETUP_ENVTEST_VERSION))
+
+.PHONY: protoc
+protoc: $(PROTOC)
+$(PROTOC): $(LOCALBIN)
+	@[ -f "$(PROTOC)-$(PROTOC_VERSION)" ] && [ "$$(readlink -- "$(PROTOC)" 2>/dev/null)" = "$(PROTOC)-$(PROTOC_VERSION)" ] || { \
+	set -e; \
+	echo "Downloading protoc $(PROTOC_VERSION)" ;\
+	rm -f "$(PROTOC)" ;\
+	OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
+	ARCH=$$(uname -m); \
+	case $$ARCH in x86_64) ARCH="x86_64";; aarch64|arm64) ARCH="aarch_64";; esac; \
+	PROTOC_ZIP="protoc-$(PROTOC_VERSION)-$${OS}-$${ARCH}.zip"; \
+	curl -Lo "$(LOCALBIN)/$$PROTOC_ZIP" "https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOC_VERSION)/$$PROTOC_ZIP"; \
+	unzip -o "$(LOCALBIN)/$$PROTOC_ZIP" -d "$(LOCALBIN)/protoc-$(PROTOC_VERSION)" bin/protoc; \
+	rm "$(LOCALBIN)/$$PROTOC_ZIP"; \
+	mv "$(LOCALBIN)/protoc-$(PROTOC_VERSION)/bin/protoc" "$(PROTOC)-$(PROTOC_VERSION)"; \
+	rm -rf "$(LOCALBIN)/protoc-$(PROTOC_VERSION)"; \
+	}; \
+	ln -sf "$$(realpath "$(PROTOC)-$(PROTOC_VERSION)")" "$(PROTOC)"
+
+.PHONY: protoc-gen-go
+protoc-gen-go: $(PROTOC_GEN_GO)
+$(PROTOC_GEN_GO): $(LOCALBIN)
+	$(call go-install-tool,$(PROTOC_GEN_GO),google.golang.org/protobuf/cmd/protoc-gen-go,$(PROTOC_GEN_GO_VERSION))
+
+.PHONY: protoc-gen-go-grpc
+protoc-gen-go-grpc: $(PROTOC_GEN_GO_GRPC)
+$(PROTOC_GEN_GO_GRPC): $(LOCALBIN)
+	$(call go-install-tool,$(PROTOC_GEN_GO_GRPC),google.golang.org/grpc/cmd/protoc-gen-go-grpc,$(PROTOC_GEN_GO_GRPC_VERSION))
 
 define go-install-tool
 @[ -f "$(1)-$(3)" ] && [ "$$(readlink -- "$(1)" 2>/dev/null)" = "$(1)-$(3)" ] || { \

@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package coraza.xds.v1;
+
+option go_package = "github.com/networking-incubator/coraza-kubernetes-operator/pkg/xds/v1;xdsv1";
+
+message RuleSet {
+  bytes rules = 1;        // WAF rules as bytes
+  string version = 2;     // UUID from cache entry
+  string name = 3;        // namespace/name format
+  string timestamp = 4;   // RFC3339Nano format
+}

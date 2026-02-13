@@ -48,14 +48,34 @@ type RuleSetEntries struct {
 
 // RuleSetCache provides thread-safe storage for rulesets with versioning
 type RuleSetCache struct {
-	mu      sync.RWMutex
-	entries map[string]*RuleSetEntries
+	mu        sync.RWMutex
+	entries   map[string]*RuleSetEntries
+	observers []Observer
 }
 
 // NewRuleSetCache creates a new RuleSetCache instance
 func NewRuleSetCache() *RuleSetCache {
 	return &RuleSetCache{
-		entries: make(map[string]*RuleSetEntries),
+		entries:   make(map[string]*RuleSetEntries),
+		observers: make([]Observer, 0),
+	}
+}
+
+// RegisterObserver adds an observer to be notified of cache updates
+func (c *RuleSetCache) RegisterObserver(observer Observer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.observers = append(c.observers, observer)
+}
+
+// notifyObservers notifies all registered observers of a cache update
+func (c *RuleSetCache) notifyObservers(key string, entry *RuleSetEntry) {
+	// Call observers without holding the lock to avoid potential deadlocks
+	observers := make([]Observer, len(c.observers))
+	copy(observers, c.observers)
+
+	for _, observer := range observers {
+		observer.OnCacheUpdate(key, entry)
 	}
 }
 
@@ -80,7 +100,6 @@ func (c *RuleSetCache) Get(instance string) (*RuleSetEntry, bool) {
 // New entries are appended to the end, maintaining oldest-to-newest order.
 func (c *RuleSetCache) Put(instance string, rules string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	newEntry := &RuleSetEntry{
 		UUID:      uuid.New().String(),
@@ -97,6 +116,11 @@ func (c *RuleSetCache) Put(instance string, rules string) {
 		c.entries[instance].Entries = append(c.entries[instance].Entries, newEntry)
 		c.entries[instance].Latest = newEntry.UUID
 	}
+
+	c.mu.Unlock()
+
+	// Notify observers after releasing the lock to avoid potential deadlocks
+	c.notifyObservers(instance, newEntry)
 }
 
 // ListKeys returns all instance names stored in the cache
