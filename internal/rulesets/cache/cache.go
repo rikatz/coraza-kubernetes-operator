@@ -18,6 +18,7 @@ limitations under the License.
 package cache
 
 import (
+	"bytes"
 	"sync"
 	"time"
 
@@ -34,8 +35,7 @@ type RuleSetEntry struct {
 	Timestamp time.Time `json:"timestamp"`
 	Rules     string    `json:"rules"`
 	// DataFiles contains a map with the datafiles names and their value
-	// TODO: decide if we want to make it base64 instead
-	DataFiles map[string][]byte `json:"dataFiles"`
+	DataFiles map[string][]byte `json:"dataFiles,omitempty,omitzero"`
 }
 
 // RuleSetEntries wraps a list of RuleSetEntry objects for an instance.
@@ -85,11 +85,18 @@ func (c *RuleSetCache) Put(instance string, rules string, datafiles map[string][
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Do a deepcopy on map to avoid race conditions in case someone access datafiles
+	// directly
+	internalData := make(map[string][]byte)
+	for f, v := range datafiles {
+		internalData[f] = bytes.Clone(v)
+	}
+
 	newEntry := &RuleSetEntry{
 		UUID:      uuid.New().String(),
 		Timestamp: time.Now(),
 		Rules:     rules,
-		DataFiles: datafiles,
+		DataFiles: internalData,
 	}
 
 	if c.entries[instance] == nil {
@@ -231,7 +238,7 @@ func (c *RuleSetCache) PruneBySize(maxSize int) int {
 			if currentSize > maxSize {
 				currentSize -= len(entry.Rules)
 				for filename, v := range entry.DataFiles {
-					currentSize += len(filename)
+					currentSize -= len(filename)
 					currentSize -= len(v)
 				}
 				pruned++

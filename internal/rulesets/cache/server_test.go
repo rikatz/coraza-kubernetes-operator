@@ -106,6 +106,7 @@ func TestServer_HandleGetRules_Success(t *testing.T) {
 	assert.Equal(t, dataFile, response.DataFiles)
 
 	t.Log("do with null datafile")
+	w = httptest.NewRecorder()
 	cache.Put("test-instance", testRules, nil)
 
 	t.Log("Requesting ruleset from server")
@@ -114,14 +115,15 @@ func TestServer_HandleGetRules_Success(t *testing.T) {
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
 	t.Log("Decoding response")
-	err = json.NewDecoder(w.Body).Decode(&response)
+	var response2 RuleSetEntry
+	err = json.NewDecoder(w.Body).Decode(&response2)
 	require.NoError(t, err)
 
 	t.Log("Verifying response contents")
-	assert.NotEmpty(t, response.UUID)
-	assert.NotEmpty(t, response.Timestamp)
-	assert.Equal(t, testRules, response.Rules)
-	assert.Empty(t, response.DataFiles)
+	assert.NotEmpty(t, response2.UUID)
+	assert.NotEmpty(t, response2.Timestamp)
+	assert.Equal(t, testRules, response2.Rules)
+	assert.Empty(t, response2.DataFiles)
 }
 
 func TestServer_HandleLatest_Success(t *testing.T) {
