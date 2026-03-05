@@ -33,6 +33,9 @@ type RuleSetEntry struct {
 	UUID      string    `json:"uuid"`
 	Timestamp time.Time `json:"timestamp"`
 	Rules     string    `json:"rules"`
+	// DataFiles contains a map with the datafiles names and their value
+	// TODO: decide if we want to make it base64 instead
+	DataFiles map[string][]byte `json:"dataFiles"`
 }
 
 // RuleSetEntries wraps a list of RuleSetEntry objects for an instance.
@@ -64,21 +67,21 @@ func (c *RuleSetCache) Get(instance string) (*RuleSetEntry, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	entries, ok := c.entries[instance]
-	if !ok || len(entries.Entries) == 0 {
-		return nil, false
-	}
-	// Find and return the entry matching the Latest UUID.
-	for _, entry := range entries.Entries {
-		if entry.UUID == entries.Latest {
-			return entry, true
+	if ok && len(entries.Entries) > 0 {
+		// Find and return the entry matching the Latest UUID.
+		for _, entry := range entries.Entries {
+			if entry.UUID == entries.Latest {
+				return entry, true
+			}
 		}
 	}
+
 	return nil, false
 }
 
 // Put stores rules for the given instance with a new UUID and timestamp.
 // New entries are appended to the end, maintaining oldest-to-newest order.
-func (c *RuleSetCache) Put(instance string, rules string) {
+func (c *RuleSetCache) Put(instance string, rules string, datafiles map[string][]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -86,6 +89,7 @@ func (c *RuleSetCache) Put(instance string, rules string) {
 		UUID:      uuid.New().String(),
 		Timestamp: time.Now(),
 		Rules:     rules,
+		DataFiles: datafiles,
 	}
 
 	if c.entries[instance] == nil {
@@ -118,6 +122,10 @@ func (c *RuleSetCache) TotalSize() int {
 	for _, entries := range c.entries {
 		for _, entry := range entries.Entries {
 			size += len(entry.Rules)
+			for name, value := range entry.DataFiles {
+				size += len(name)
+				size += len(value)
+			}
 		}
 	}
 	return size
@@ -193,6 +201,10 @@ func (c *RuleSetCache) PruneBySize(maxSize int) int {
 	for _, entries := range c.entries {
 		for _, entry := range entries.Entries {
 			currentSize += len(entry.Rules)
+			for filename, v := range entry.DataFiles {
+				currentSize += len(filename)
+				currentSize += len(v)
+			}
 		}
 	}
 
@@ -218,6 +230,10 @@ func (c *RuleSetCache) PruneBySize(maxSize int) int {
 			// If we're still over size, prune.
 			if currentSize > maxSize {
 				currentSize -= len(entry.Rules)
+				for filename, v := range entry.DataFiles {
+					currentSize += len(filename)
+					currentSize -= len(v)
+				}
 				pruned++
 			} else {
 				// Under size now, keep the remainder.

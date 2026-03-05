@@ -259,9 +259,8 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	logDebug(log, req, "RuleSet", "Storing aggregated rules in cache")
 
-	// TODO (asnaps) - If the secretData is not null, push each key/value to the cache with a specific type
 	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
-	r.Cache.Put(cacheKey, aggregatedRules.String())
+	r.Cache.Put(cacheKey, aggregatedRules.String(), secretData)
 	logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
 
 	patch := client.MergeFrom(ruleset.DeepCopy())
