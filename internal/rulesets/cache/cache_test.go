@@ -78,7 +78,12 @@ func TestRuleSetCache_PutAndGet(t *testing.T) {
 			require.NotNil(t, entry)
 
 			assert.Equal(t, tt.rules, entry.Rules)
-			assert.Equal(t, tt.dataFiles, entry.DataFiles)
+			if len(tt.dataFiles) > 0 {
+				assert.Equal(t, tt.dataFiles, entry.DataFiles)
+			} else {
+				assert.Empty(t, entry.DataFiles)
+			}
+
 			assert.NotEmpty(t, entry.UUID, "UUID should be generated")
 			assert.False(t, entry.Timestamp.IsZero(), "Timestamp should be set")
 		})
