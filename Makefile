@@ -194,7 +194,7 @@ LOCALRULES ?= $(shell pwd)/tmp/rules
 CORERULESET_DIR ?= $(shell pwd)/tmp/coreruleset
 TMP_DOWNLOAD_DIR ?= $(shell pwd)/tmp/download
 NAMESPACE ?= default
-CORERULESET_EXTRA_FLAGS ?= --ignore-pmFromFile
+CORERULESET_EXTRA_FLAGS ?=
 
 $(LOCALRULES):
 	mkdir -p "$(LOCALRULES)"
@@ -241,7 +241,7 @@ ftw.environment: cluster.kind
 
 .PHONY: ftw.coreruleset
 ftw.coreruleset:
-	$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule --ignore-pmFromFile" NAMESPACE=$(FTW_NAMESPACE) coraza.coreruleset
+	$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule" NAMESPACE=$(FTW_NAMESPACE) coraza.coreruleset
 
 .PHONY: ftw.run
 ftw.run: coraza.coreruleset.download
