@@ -110,7 +110,7 @@ type EngineOpts struct {
 // Defaults
 // -----------------------------------------------------------------------------
 
-const fallbackWasmImage = "oci://ghcr.io/networking-incubator/coraza-proxy-wasm:179ea90b2617f557f805fe672daf880c14c6b8b7"
+const fallbackWasmImage = "oci://ghcr.io/networking-incubator/coraza-proxy-wasm:08fb3dd7229b6bf9211bf15e4d4f4f54b7dbda49"
 
 func defaultWasmImage() string {
 	if img := os.Getenv("CORAZA_WASM_IMAGE"); img != "" {
