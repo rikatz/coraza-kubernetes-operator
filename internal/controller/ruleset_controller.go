@@ -180,7 +180,15 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if cm.Annotations["coraza.io/validation"] != "false" {
 			conf := coraza.NewWAFConfig().WithDirectives(data)
 			if _, err := coraza.NewWAF(conf); err != nil {
-				aggregatedErrors = append(aggregatedErrors, fmt.Errorf("ConfigMap %s doesn't contain valid rules: %w", rule.Name, sanitizeErrorMessage(err)))
+				// If RuleData is configured and the only validation issue is a missing data file, and
+				// the missing datafile is present on the ruledata map, skip the validation
+				// skip per-ConfigMap validation error here. The aggregated RuleSet validation
+				// will run with the proper rootFS once RuleData is loaded.
+				if ruleset.Spec.RuleData != "" && sanitizeFilePath.MatchString(err.Error()) {
+					logDebug(log, req, "RuleSet", "Skipping per-ConfigMap validation error due to missing data file with RuleData configured", "configMapName", rule.Name, "error", err.Error())
+				} else {
+					aggregatedErrors = append(aggregatedErrors, fmt.Errorf("ConfigMap %s doesn't contain valid rules: %w", rule.Name, sanitizeErrorMessage(err)))
+				}
 			}
 		}
 
