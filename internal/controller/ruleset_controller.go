@@ -124,6 +124,52 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
+	// Load RuleData Secret first if configured, so we can check if missing data files
+	// actually exist in it during per-ConfigMap validation
+	ruleData := ruleset.Spec.RuleData
+	var secretData map[string][]byte
+	if ruleData != "" {
+		var found bool
+		var err error
+		logDebug(log, req, "RuleSet", "Fetching data secret", "secretName", ruleData, "secretNamespace", ruleset.Namespace)
+		secretData, found, err = r.getDataSecret(ctx, ruleData, ruleset.Namespace)
+		if err != nil {
+			if found {
+				// Secret was found but is of wrong type
+				logError(log, req, "RuleSet", err, "Failed to get RuleData", "secretName", ruleData)
+				patch := client.MergeFrom(ruleset.DeepCopy())
+				msg := fmt.Sprintf("Failed to use RuleData secret %s: %v", ruleData, err)
+				r.Recorder.Eventf(&ruleset, nil, "Warning", "RuleDataSecretTypeMismatch", "Reconcile", msg)
+				setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "RuleDataSecretTypeMismatch", msg)
+				if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
+					logError(log, req, "RuleSet", updateErr, "Failed to patch status")
+				}
+				return ctrl.Result{}, nil
+			}
+			logError(log, req, "RuleSet", err, "Failed to get RuleData", "secretName", ruleData)
+			patch := client.MergeFrom(ruleset.DeepCopy())
+			msg := fmt.Sprintf("Failed to access RuleData secret %s: %v", ruleData, err)
+			r.Recorder.Eventf(&ruleset, nil, "Warning", "SecretAccessError", "Reconcile", msg)
+			setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "SecretAccessError", msg)
+			if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
+				logError(log, req, "RuleSet", updateErr, "Failed to patch status")
+			}
+			return ctrl.Result{}, err
+		}
+		if !found {
+			logInfo(log, req, "RuleSet", "Secret not found", "secretName", ruleData)
+			patch := client.MergeFrom(ruleset.DeepCopy())
+			msg := fmt.Sprintf("Referenced Secret %s does not exist", ruleData)
+			r.Recorder.Eventf(&ruleset, nil, "Warning", "SecretNotFound", "Reconcile", msg)
+			setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "SecretNotFound", msg)
+			if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
+				logError(log, req, "RuleSet", updateErr, "Failed to patch status")
+			}
+			// Do not requeue; rely on future Secret events to trigger reconciliation when it appears
+			return ctrl.Result{}, nil
+		}
+	}
+
 	logDebug(log, req, "RuleSet", "Aggregating rules from sources", "ruleCount", len(ruleset.Spec.Rules))
 	var aggregatedRules strings.Builder
 	aggregatedErrors := make([]error, 0)
@@ -180,12 +226,11 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if cm.Annotations["coraza.io/validation"] != "false" {
 			conf := coraza.NewWAFConfig().WithDirectives(data)
 			if _, err := coraza.NewWAF(conf); err != nil {
-				// If RuleData is configured and the only validation issue is a missing data file, and
-				// the missing datafile is present on the ruledata map, skip the validation
-				// skip per-ConfigMap validation error here. The aggregated RuleSet validation
-				// will run with the proper rootFS once RuleData is loaded.
-				if ruleset.Spec.RuleData != "" && sanitizeFilePath.MatchString(err.Error()) {
-					logDebug(log, req, "RuleSet", "Skipping per-ConfigMap validation error due to missing data file with RuleData configured", "configMapName", rule.Name, "error", err.Error())
+				// If the validation error is due to a missing data file, check if that file
+				// is actually present in the RuleData Secret. Only skip this per-ConfigMap
+				// validation error if the file will be available during aggregated validation.
+				if shouldSkipMissingFileError(err, secretData) {
+					logDebug(log, req, "RuleSet", "Skipping per-ConfigMap validation error for missing data file present in RuleData", "configMapName", rule.Name, "error", err.Error())
 				} else {
 					aggregatedErrors = append(aggregatedErrors, fmt.Errorf("ConfigMap %s doesn't contain valid rules: %w", rule.Name, sanitizeErrorMessage(err)))
 				}
@@ -196,50 +241,6 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		aggregatedRules.WriteString(data)
 		if i < len(ruleset.Spec.Rules)-1 {
 			aggregatedRules.WriteString("\n")
-		}
-	}
-
-	ruleData := ruleset.Spec.RuleData
-	var secretData map[string][]byte
-	if ruleData != "" {
-		var found bool
-		var err error
-		logDebug(log, req, "RuleSet", "Fetching data secret", "secretName", ruleData, "secretNamespace", ruleset.Namespace)
-		secretData, found, err = r.getDataSecret(ctx, ruleData, ruleset.Namespace)
-		if err != nil {
-			if found {
-				// Secret was found but is of wrong type
-				logError(log, req, "RuleSet", err, "Failed to get RuleData", "secretName", ruleData)
-				patch := client.MergeFrom(ruleset.DeepCopy())
-				msg := fmt.Sprintf("Failed to use RuleData secret %s: %v", ruleData, err)
-				r.Recorder.Eventf(&ruleset, nil, "Warning", "RuleDataSecretTypeMismatch", "Reconcile", msg)
-				setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "RuleDataSecretTypeMismatch", msg)
-				if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
-					logError(log, req, "RuleSet", updateErr, "Failed to patch status")
-				}
-				return ctrl.Result{}, nil
-			}
-			logError(log, req, "RuleSet", err, "Failed to get RuleData", "secretName", ruleData)
-			patch := client.MergeFrom(ruleset.DeepCopy())
-			msg := fmt.Sprintf("Failed to access RuleData secret %s: %v", ruleData, err)
-			r.Recorder.Eventf(&ruleset, nil, "Warning", "SecretAccessError", "Reconcile", msg)
-			setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "SecretAccessError", msg)
-			if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
-				logError(log, req, "RuleSet", updateErr, "Failed to patch status")
-			}
-			return ctrl.Result{}, err
-		}
-		if !found {
-			logInfo(log, req, "RuleSet", "Secret not found", "secretName", ruleData)
-			patch := client.MergeFrom(ruleset.DeepCopy())
-			msg := fmt.Sprintf("Referenced Secret %s does not exist", ruleData)
-			r.Recorder.Eventf(&ruleset, nil, "Warning", "SecretNotFound", "Reconcile", msg)
-			setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "SecretNotFound", msg)
-			if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
-				logError(log, req, "RuleSet", updateErr, "Failed to patch status")
-			}
-			// Do not requeue; rely on future Secret events to trigger reconciliation when it appears
-			return ctrl.Result{}, nil
 		}
 	}
 
@@ -327,4 +328,28 @@ func sanitizeErrorMessage(err error) error {
 
 	return fmt.Errorf("open %s: data does not exist", fileName)
 
+}
+
+// shouldSkipMissingFileError determines if a validation error should be skipped
+// because it's only due to a missing data file that exists in the provided secretData.
+// Returns true only if:
+// 1. The error matches the missing file pattern
+// 2. secretData is not nil
+// 3. The missing file is actually present in secretData
+func shouldSkipMissingFileError(err error, secretData map[string][]byte) bool {
+	if secretData == nil {
+		return false
+	}
+
+	matches := sanitizeFilePath.FindStringSubmatch(err.Error())
+	if len(matches) < 2 {
+		return false
+	}
+
+	// Extract the filename from the error. matches[1] contains the full path.
+	fileName := filepath.Base(matches[1])
+
+	// Only skip if this file is actually present in the RuleData Secret
+	_, exists := secretData[fileName]
+	return exists
 }

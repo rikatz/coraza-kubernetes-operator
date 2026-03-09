@@ -221,13 +221,11 @@ coraza.coreruleset: coraza.generaterules
 	kubectl delete -n $(NAMESPACE) --ignore-not-found -f $(LOCALRULES)/*.yaml
 	kubectl apply -n $(NAMESPACE) --server-side -f $(LOCALRULES)/*.yaml
 
-# TODO: Deploy a Gateway, set port-forward and log-forward and run ftw passing the right flags
 # -------------------------------------------------------------------------------
 # Coraza Coreruleset - FTW testing
 # -------------------------------------------------------------------------------
 
 FTW_NAMESPACE ?= ftw-test
-# TODO: we should get this from the created manifests
 GATEWAY_NAME ?= coraza-gateway 
 FTW_OUTPUT_FORMAT ?= plain
 FTW_EXTRA_ARGS ?= 

@@ -34,7 +34,7 @@ type RuleSetEntry struct {
 	UUID      string    `json:"uuid"`
 	Timestamp time.Time `json:"timestamp"`
 	Rules     string    `json:"rules"`
-	// DataFiles contains a map with the datafiles names and their value
+	// DataFiles contains a map with the data file names and their contents
 	DataFiles map[string][]byte `json:"dataFiles,omitempty,omitzero"`
 }
 
