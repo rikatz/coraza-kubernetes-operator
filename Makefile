@@ -237,7 +237,7 @@ ftw.environment: cluster.kind
 	kubectl delete ns --ignore-not-found $(FTW_NAMESPACE)
 	kubectl create ns $(FTW_NAMESPACE)
 	kubectl apply -n $(FTW_NAMESPACE) -f config/samples/
-	kubectl wait deploy -n $(FTW_NAMESPACE) -l gateway.networking.k8s.io/gateway-name=$(GATEWAY_NAME) --for=condition=Available
+	kubectl wait deploy -n $(FTW_NAMESPACE) -l gateway.networking.k8s.io/gateway-name=$(GATEWAY_NAME) --timeout=2m --for=condition=Available
 
 .PHONY: ftw.coreruleset
 ftw.coreruleset:
