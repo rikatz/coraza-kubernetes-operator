@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +145,48 @@ func (s *Scenario) ApplyManifest(namespace, path string) {
 	s.OnCleanup(func() {
 		_ = s.F.Kubectl(namespace, "delete", "-f", path, "--ignore-not-found=true").Run()
 	})
+}
+
+// StreamGatewayLogs opens a log stream for the named Gateway's pod and returns
+// an io.Reader. The stream follows logs in real-time. Cleanup is registered
+// automatically to stop the stream when the scenario ends.
+func (s *Scenario) StreamGatewayLogs(namespace, gatewayName string) io.Reader {
+	s.T.Helper()
+	ctx := s.T.Context()
+
+	// Find the Gateway pod using the standard label selector.
+	labelSelector := fmt.Sprintf(
+		"gateway.networking.k8s.io/gateway-name=%s", gatewayName,
+	)
+	pods, err := s.F.KubeClient.CoreV1().Pods(namespace).List(
+		ctx,
+		metav1.ListOptions{LabelSelector: labelSelector},
+	)
+	require.NoError(s.T, err, "list pods for gateway %s/%s", namespace, gatewayName)
+	require.NotEmpty(s.T, pods.Items, "no pods found for gateway %s/%s", namespace, gatewayName)
+
+	podName := pods.Items[0].Name
+	containerName := pods.Items[0].Spec.Containers[0].Name
+
+	// Open the log stream with Follow enabled for real-time streaming.
+	logOpts := &corev1.PodLogOptions{
+		Container: containerName,
+		Follow:    true,
+	}
+	req := s.F.KubeClient.CoreV1().Pods(namespace).GetLogs(podName, logOpts)
+	stream, err := req.Stream(ctx)
+	require.NoError(s.T, err, "open log stream for %s/%s", namespace, podName)
+
+	s.T.Logf("Streaming logs from %s/%s (%s)", namespace, podName, containerName)
+
+	// Register cleanup to close the stream.
+	s.OnCleanup(func() {
+		if err := stream.Close(); err != nil {
+			s.T.Logf("cleanup: failed to close log stream for %s/%s: %v", namespace, podName, err)
+		}
+	})
+
+	return stream
 }
 
 // -----------------------------------------------------------------------------
