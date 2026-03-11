@@ -19,6 +19,8 @@ limitations under the License.
 package conformance
 
 import (
+	"errors"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -59,12 +61,19 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	_, err = os.Stat(configFile)
 	require.NoError(t, err, "FTW_CONFIG must be a valid and existing path for the ruleset")
 
-	// Load FTWTests and bail out immediatelly in case of errors
-	// TODO, unhardcode the ignore rule processing error
+	// Load FTW tests and bail out immediately in case of unexpected errors.
+	// Whether to ignore individual FTW test parsing errors is configurable via
+	// the FTW_IGNORE_TEST_ERRORS environment variable (defaults to true).
 	// -------------------------------------------------------------------------
 	// Step 1: Initialize Coreruleset conformance framework
 	// -------------------------------------------------------------------------
-	tests, err := loadTests(t, testManifestsLocation, true)
+	ignoreErrors := false
+	if v, ok := os.LookupEnv("IGNORE_TEST_MANIFEST_ERRORS"); ok {
+		parsed, err := strconv.ParseBool(v)
+		require.NoError(t, err, "IGNORE_TEST_MANIFEST_ERRORS must be a boolean")
+		ignoreErrors = parsed
+	}
+	tests, err := loadTests(t, testManifestsLocation, ignoreErrors)
 	require.NoError(t, err, "error loading FTW tests")
 	require.NotZero(t, len(tests), "no test was loaded")
 
@@ -112,6 +121,9 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "WasmPluginCreated"})
 
 	// Give enough time for the engine to load the new rules
+	// This is necessary due to multiple reasons:
+	// - The bug https://github.com/networking-incubator/coraza-proxy-wasm/issues/3 that makes Envoy crash earlier on the first load
+	// - The cache client ticks every 5seconds to get rules from server, we need to be sure it will have enough time to load
 	time.Sleep(15 * time.Second)
 
 	// -------------------------------------------------------------------------
@@ -125,6 +137,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	require.NoError(t, err, "create temporary log file")
 
 	// Stream logs to file with immediate writes (no buffering)
+	outputErrors := make([]error, 0)
 	logDone := make(chan struct{})
 	go func() {
 		defer close(logDone)
@@ -134,11 +147,17 @@ func TestCoreRuleSetConformance(t *testing.T) {
 			n, err := logStream.Read(buf)
 			if n > 0 {
 				totalBytes += n
-				_, _ = logFile.Write(buf[:n])
-				_ = logFile.Sync() // Force immediate write to disk
+				_, err = logFile.Write(buf[:n])
+				if err != nil {
+					outputErrors = append(outputErrors, err)
+				}
+				err = logFile.Sync() // Force immediate write to disk
+				if err != nil {
+					outputErrors = append(outputErrors, err)
+				}
 			}
 			if err != nil {
-				if err.Error() != "EOF" {
+				if errors.Is(err, io.EOF) {
 					t.Logf("log streaming ended: %v (wrote %d bytes)", err, totalBytes)
 				} else {
 					t.Logf("log streaming completed: wrote %d bytes", totalBytes)
@@ -146,12 +165,21 @@ func TestCoreRuleSetConformance(t *testing.T) {
 				break
 			}
 		}
-		_ = logFile.Sync() // Final sync before goroutine exits
+		err = logFile.Sync() // Final sync before goroutine exits
+		if err != nil {
+			outputErrors = append(outputErrors, err)
+		}
+		if len(outputErrors) > 0 {
+			t.Logf("some errors occured during the log streaming: %+v", outputErrors)
+		}
 	}()
 
 	s.OnCleanup(func() {
+		// Close the log stream first to unblock the streaming goroutine,
+		// then wait for it to finish before closing the file.
+		_ = logStream.Close()
 		<-logDone // Wait for streaming goroutine to finish
-		logFile.Close()
+		_ = logFile.Close()
 		s.T.Logf("Gateway logs saved to: %s", logFile.Name())
 	})
 
@@ -170,12 +198,12 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// Step 6: Run FTW tests
 	// -------------------------------------------------------------------------
-	output := buildOutput(t)
+	testOutput := buildOutput(t)
 	runnerConfig := config.NewRunnerConfiguration(cfg)
 	runnerConfig.ShowTime = false
 	runnerConfig.ReadTimeout = 10 * time.Second
 	runnerConfig.FailFast = false
-	res, err := runner.Run(runnerConfig, tests, output)
+	res, err := runner.Run(runnerConfig, tests, testOutput)
 	require.NoError(t, err, "error running conformance")
 
 	totalIgnored := len(res.Stats.Ignored)
@@ -191,6 +219,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 
 func loadTests(t *testing.T, manifestDir string, ignoreErrors bool) ([]*test.FTWTest, error) {
 	// sample from https://github.com/corazawaf/coraza/blob/main/testing/coreruleset/coreruleset_test.go#L235-L253
+	t.Helper()
 	var tests []*test.FTWTest
 	fsys := os.DirFS(manifestDir)
 	err := doublestar.GlobWalk(fsys, "**/*.yaml", func(path string, d os.DirEntry) error {
@@ -213,6 +242,7 @@ func loadTests(t *testing.T, manifestDir string, ignoreErrors bool) ([]*test.FTW
 }
 
 func buildOutput(t *testing.T) *output.Output {
+	t.Helper()
 	outputFilename := os.Getenv("OUTPUT_FILE")
 	outputFormat, ok := os.LookupEnv("OUTPUT_FORMAT")
 	if !ok {
@@ -227,6 +257,10 @@ func buildOutput(t *testing.T) *output.Output {
 	} else {
 		outputFile, err = os.Create(outputFilename)
 		require.NoError(t, err)
+		t.Cleanup(func() {
+			err := outputFile.Close()
+			require.NoError(t, err)
+		})
 	}
 	return output.NewOutput(outputFormat, outputFile)
 }

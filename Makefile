@@ -224,7 +224,7 @@ coraza.coreruleset: coraza.generaterules
 # -------------------------------------------------------------------------------
 # Coraza Coreruleset - Conformance test
 # -------------------------------------------------------------------------------
-CONFORMANCE_EXTRA_FLAGS ?= OUTPUT_FILE=/tmp/lala OUTPUT_FORMAT=github
+CONFORMANCE_EXTRA_FLAGS ?= 
 
 .PHONY: test.conformance
 test.conformance:

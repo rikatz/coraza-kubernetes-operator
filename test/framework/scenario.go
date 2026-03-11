@@ -148,9 +148,10 @@ func (s *Scenario) ApplyManifest(namespace, path string) {
 }
 
 // StreamGatewayLogs opens a log stream for the named Gateway's pod and returns
-// an io.Reader. The stream follows logs in real-time. Cleanup is registered
-// automatically to stop the stream when the scenario ends.
-func (s *Scenario) StreamGatewayLogs(namespace, gatewayName string) io.Reader {
+// an io.ReadCloser. The stream follows logs in real-time. Callers may close
+// the stream early if desired; cleanup is also registered automatically to
+// stop the stream when the scenario ends.
+func (s *Scenario) StreamGatewayLogs(namespace, gatewayName string) io.ReadCloser {
 	s.T.Helper()
 	ctx := s.T.Context()
 
