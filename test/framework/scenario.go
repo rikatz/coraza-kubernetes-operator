@@ -159,16 +159,50 @@ func (s *Scenario) StreamGatewayLogs(namespace, gatewayName string) io.ReadClose
 	labelSelector := fmt.Sprintf(
 		"gateway.networking.k8s.io/gateway-name=%s", gatewayName,
 	)
-	pods, err := s.F.KubeClient.CoreV1().Pods(namespace).List(
-		ctx,
-		metav1.ListOptions{LabelSelector: labelSelector},
+
+	var podName, containerName string
+	// Poll until we find a Running and Ready pod with at least one container.
+	require.Eventually(
+		s.T,
+		func() bool {
+			pods, err := s.F.KubeClient.CoreV1().Pods(namespace).List(
+				ctx,
+				metav1.ListOptions{LabelSelector: labelSelector},
+			)
+			if err != nil {
+				s.T.Logf("failed to list pods for gateway %s/%s: %v", namespace, gatewayName, err)
+				return false
+			}
+			if len(pods.Items) == 0 {
+				return false
+			}
+			for _, pod := range pods.Items {
+				if pod.Status.Phase != corev1.PodRunning {
+					continue
+				}
+				ready := false
+				for _, cond := range pod.Status.Conditions {
+					if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+						ready = true
+						break
+					}
+				}
+				if !ready {
+					continue
+				}
+				if len(pod.Spec.Containers) == 0 {
+					continue
+				}
+				podName = pod.Name
+				containerName = pod.Spec.Containers[0].Name
+				return true
+			}
+			return false
+		},
+		DefaultTimeout,
+		DefaultInterval,
+		"no running/ready pods found for gateway %s/%s", namespace, gatewayName,
 	)
-	require.NoError(s.T, err, "list pods for gateway %s/%s", namespace, gatewayName)
-	require.NotEmpty(s.T, pods.Items, "no pods found for gateway %s/%s", namespace, gatewayName)
-
-	podName := pods.Items[0].Name
-	containerName := pods.Items[0].Spec.Containers[0].Name
-
 	// Open the log stream with Follow enabled for real-time streaming.
 	logOpts := &corev1.PodLogOptions{
 		Container: containerName,

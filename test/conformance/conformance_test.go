@@ -24,6 +24,7 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"testing"
 	"time"
@@ -49,6 +50,9 @@ const (
 // project FTW (https://github.com/coreruleset/go-ftw) and the test rules defined by
 // coreruleset and execute them against a Gateway with a full RuleSet attached to it.
 func TestCoreRuleSetConformance(t *testing.T) {
+	// -------------------------------------------------------------------------
+	// Step 0: Get environment variables
+	// -------------------------------------------------------------------------
 	ruleLocation := os.Getenv("RULESET_PATH")
 	require.NotEmpty(t, ruleLocation, "RULESET_PATH must contain a path for a manifests of RuleSet to be deployed for tests")
 	testManifestsLocation := os.Getenv("TESTMANIFESTS_PATH")
@@ -61,9 +65,16 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	_, err = os.Stat(configFile)
 	require.NoError(t, err, "FTW_CONFIG must be a valid and existing path for the ruleset")
 
+	var includeTests *regexp.Regexp
+	if includeEnv, ok := os.LookupEnv("INCLUDE_TESTS"); ok {
+		var err error
+		includeTests, err = regexp.Compile(includeEnv)
+		require.NoError(t, err)
+	}
+
 	// Load FTW tests and bail out immediately in case of unexpected errors.
 	// Whether to ignore individual FTW test parsing errors is configurable via
-	// the FTW_IGNORE_TEST_ERRORS environment variable (defaults to true).
+	// the FTW_IGNORE_TEST_ERRORS environment variable.
 	// -------------------------------------------------------------------------
 	// Step 1: Initialize Coreruleset conformance framework
 	// -------------------------------------------------------------------------
@@ -170,7 +181,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 			outputErrors = append(outputErrors, err)
 		}
 		if len(outputErrors) > 0 {
-			t.Logf("some errors occured during the log streaming: %+v", outputErrors)
+			t.Logf("some errors occurred during the log streaming: %+v", outputErrors)
 		}
 	}()
 
@@ -203,6 +214,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	runnerConfig.ShowTime = false
 	runnerConfig.ReadTimeout = 10 * time.Second
 	runnerConfig.FailFast = false
+	runnerConfig.Include = includeTests
 	res, err := runner.Run(runnerConfig, tests, testOutput)
 	require.NoError(t, err, "error running conformance")
 
