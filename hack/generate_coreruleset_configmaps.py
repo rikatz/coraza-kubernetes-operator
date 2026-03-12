@@ -334,7 +334,7 @@ def generate_configmap(file_path: Path, ignore_rule_ids: Set[str], ignore_pmfrom
         return "", "", "No SecRule or SecAction directives found"
 
     # Indent the rules content for YAML
-    indented_rules = "\n".join(f"    {line}" if line.strip() else "" for line in processed_content.splitlines())
+    indented_rules = "\n".join(f"    {line}" if line.strip() else "    " for line in processed_content.splitlines())
 
     configmap = f"""apiVersion: v1
 kind: ConfigMap
@@ -359,7 +359,7 @@ def generate_data_secret(data_files: List[Path], secret_name: str = "coreruleset
         try:
             content = data_file.read_text(encoding='utf-8', errors='ignore')
             # Indent the content for YAML
-            indented_content = "\n".join(f"    {line}" if line.strip() else "" for line in content.splitlines())
+            indented_content = "\n".join(f"    {line}" if line.strip() else "    " for line in content.splitlines())
             data_entries.append(f"  {data_file.name}: |\n{indented_content}")
         except Exception as e:
             print(f"ERROR: Failed to read data file {data_file}: {e}", file=sys.stderr)

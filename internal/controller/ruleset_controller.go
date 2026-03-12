@@ -269,6 +269,10 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logDebug(log, req, "RuleSet", "Storing aggregated rules in cache")
 
 	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
+	// NOTE: The data stored in the cache (including any RuleData sourced from a Secret)
+	// is served by the cache HTTP server for consumption by the WASM plugin and must
+	// therefore not contain sensitive or credential material. Treat the cache server
+	// endpoint as internal / trusted-only in deployments.
 	r.Cache.Put(cacheKey, aggregatedRules.String(), secretData)
 	logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
 

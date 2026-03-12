@@ -68,10 +68,24 @@ func (c *RuleSetCache) Get(instance string) (*RuleSetEntry, bool) {
 	defer c.mu.RUnlock()
 	entries, ok := c.entries[instance]
 	if ok && len(entries.Entries) > 0 {
-		// Find and return the entry matching the Latest UUID.
+		// Find the entry matching the Latest UUID.
 		for _, entry := range entries.Entries {
 			if entry.UUID == entries.Latest {
-				return entry, true
+				// Return a deep copy so callers cannot mutate internal cache state.
+				var copiedDataFiles map[string][]byte
+				if entry.DataFiles != nil {
+					copiedDataFiles = make(map[string][]byte, len(entry.DataFiles))
+					for name, contents := range entry.DataFiles {
+						copiedDataFiles[name] = bytes.Clone(contents)
+					}
+				}
+				copiedEntry := &RuleSetEntry{
+					UUID:      entry.UUID,
+					Timestamp: entry.Timestamp,
+					Rules:     entry.Rules,
+					DataFiles: copiedDataFiles,
+				}
+				return copiedEntry, true
 			}
 		}
 	}
