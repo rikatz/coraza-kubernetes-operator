@@ -228,7 +228,7 @@ CONFORMANCE_EXTRA_FLAGS ?=
 
 .PHONY: test.conformance
 test.conformance:
-	$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule --ignore-pmFromFile" coraza.generaterules
+	$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule" coraza.generaterules
 	cd test/conformance &&  $(CONFORMANCE_EXTRA_FLAGS) FTW_CONFIG=$(shell pwd)/test/conformance/ftw.yml TESTMANIFESTS_PATH=$(CORERULESET_DIR)/tests/tests RULESET_PATH=$(LOCALRULES)/rules.yaml KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} ISTIO_VERSION=${ISTIO_VERSION} go test -tags=conformance ./... -v
 
 # -------------------------------------------------------------------------------
