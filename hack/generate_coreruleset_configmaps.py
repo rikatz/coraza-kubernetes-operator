@@ -28,9 +28,17 @@ from typing import List, Tuple, Set
 # NOTE: SecAuditLogRelevantStatus uses "^(40[0-3]|40[5-9]|4[1-9][0-9]|5[0-9][0-9])$" instead of
 # the Perl-style "^(?:5|4(?!04))" because Coraza/Envoy WASM uses RE2 regex engine which does not
 # support negative lookahead (?!). This pattern matches all 4xx and 5xx status codes except 404.
-# The base rules present here are extracted from https://github.com/corazawaf/coraza-proxy-wasm/tree/3607c012f60c07263cd4d7a96e787e82b9047b7f/wasmplugin/rules
-# - crs-setup.conf.example
-# - coraza.conf-recommended.conf
+#
+# The base rules configuration is based on:
+# - CoreRuleset v4.24.1: https://github.com/coreruleset/coreruleset/blob/v4.24.1/crs-setup.conf.example
+# - Coraza v3.4.0: https://github.com/corazawaf/coraza/blob/v3.4.0/coraza.conf-recommended
+#
+# Configuration breakdown:
+# - SecRuleEngine, SecRequestBodyAccess, SecResponseBodyAccess, SecAuditEngine, etc.: From coraza.conf-recommended
+# - SecDefaultAction phase:1 and phase:2: Required for CRS v4 anomaly scoring mode (from crs-setup.conf.example)
+# - Rules 200000-200006: Request body processors for XML/JSON (from coraza.conf-recommended)
+# - Rules 200002-200003: Request body error handling (from coraza.conf-recommended)
+# - Rules 900120, 900990: CRS initialization rules (from crs-setup.conf.example)
 BASE_RULES_CONFIGMAP = """apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -39,11 +47,13 @@ data:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
-    SecRequestBodyLimit 131072
+    SecRequestBodyLimit 13107200
     SecRequestBodyInMemoryLimit 131072
     SecRequestBodyLimitAction Reject
-    SecResponseBodyAccess Off
-    SecResponseBodyMimeType text/plain text/html text/xml
+    SecResponseBodyAccess On
+    SecResponseBodyMimeType text/plain text/html text/xml application/json
+    # SecRequestBodyJsonDepthLimit directive requires Coraza 3.4.0 on WASM Plugin and it is not supported yet
+    # SecRequestBodyJsonDepthLimit 1024
     SecResponseBodyLimit 524288
     SecResponseBodyLimitAction ProcessPartial
     SecAuditEngine RelevantOnly
@@ -52,6 +62,8 @@ data:
     SecAuditLogFormat JSON
     SecAuditLogParts ABIJDEFHZ
     SecAuditLogRelevantStatus "^(40[0-3]|40[5-9]|4[1-9][0-9]|5[0-9][0-9])$"
+    SecDefaultAction "phase:1,log,auditlog,pass"
+    SecDefaultAction "phase:2,log,auditlog,pass"
     SecRule REQUEST_HEADERS:Content-Type "^(?:application(?:/soap\\+|/)|text/)xml" \\
      "id:200000,\\
      phase:1,\\
@@ -91,7 +103,6 @@ data:
      deny,\\
      status:400,\\
      msg:'Multipart request body failed strict validation.'"
-    SecDefaultAction "phase:2,log,auditlog,deny,status:403"
     SecAction \\
      "id:900120,\\
      phase:1,\\
@@ -99,7 +110,7 @@ data:
      t:none,\\
      nolog,\\
      tag:'OWASP_CRS',\\
-     ver:'OWASP_CRS/4.23.0',\\
+     ver:'OWASP_CRS/4.24.1',\\
      setvar:tx.early_blocking=1"
     SecAction \\
      "id:900990,\\
@@ -108,8 +119,8 @@ data:
      t:none,\\
      nolog,\\
      tag:'OWASP_CRS',\\
-     ver:'OWASP_CRS/4.23.0',\\
-     setvar:tx.crs_setup_version=4230"
+     ver:'OWASP_CRS/4.24.1',\\
+     setvar:tx.crs_setup_version=4241"
 """
 
 # X-CRS-Test rule (optional)

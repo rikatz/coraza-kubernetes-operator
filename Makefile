@@ -197,7 +197,7 @@ test.tools:
 # Coraza Coreruleset targets
 # -------------------------------------------------------------------------------
 
-CORERULESET_VERSION ?= v4.23.0
+CORERULESET_VERSION ?= v4.24.1
 LOCALRULES ?= $(shell pwd)/tmp/rules
 CORERULESET_DIR ?= $(shell pwd)/tmp/coreruleset
 TMP_DOWNLOAD_DIR ?= $(shell pwd)/tmp/download
