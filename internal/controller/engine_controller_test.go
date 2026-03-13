@@ -56,12 +56,11 @@ func TestEngineReconciler_ReconcileNotFound(t *testing.T) {
 
 func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
 	ctx := context.Background()
-	ns := "default"
 
 	t.Log("Creating test engine referencing non-existent RuleSet")
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:        "test-engine-missing-ruleset",
-		Namespace:   ns,
+		Namespace:   testNamespace,
 		RuleSetName: "non-existent-ruleset",
 	})
 	err := k8sClient.Create(ctx, engine)
@@ -149,7 +148,7 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 	t.Log("Creating test engine for status update testing")
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:      "status-test",
-		Namespace: "default",
+		Namespace: testNamespace,
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine))
 	t.Cleanup(func() {
@@ -186,6 +185,110 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 		assert.NotEmpty(t, condition.Status)
 		assert.NotEmpty(t, condition.Reason)
 	}
+}
+
+func TestEngineReconciler_FailurePolicyInWasmPluginConfig(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name                  string
+		failurePolicy         wafv1alpha1.FailurePolicy
+		expectedFailurePolicy string
+	}{
+		{
+			name:                  "failure policy fail",
+			failurePolicy:         wafv1alpha1.FailurePolicyFail,
+			expectedFailurePolicy: "fail",
+		},
+		{
+			name:                  "failure policy allow",
+			failurePolicy:         wafv1alpha1.FailurePolicyAllow,
+			expectedFailurePolicy: "allow",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			t.Logf("Creating test engine with failure policy: %s", tt.failurePolicy)
+			engine := utils.NewTestEngine(utils.EngineOptions{
+				Name:          "test-engine-" + string(tt.failurePolicy),
+				Namespace:     testNamespace,
+				FailurePolicy: tt.failurePolicy,
+			})
+			err := k8sClient.Create(ctx, engine)
+			require.NoError(t, err)
+			defer func() {
+				if err := k8sClient.Delete(ctx, engine); err != nil {
+					t.Logf("Failed to delete engine: %v", err)
+				}
+			}()
+
+			t.Log("Reconciling engine")
+			reconciler := &EngineReconciler{
+				Client:                    k8sClient,
+				Scheme:                    scheme,
+				Recorder:                  utils.NewTestRecorder(),
+				ruleSetCacheServerCluster: "test-cluster",
+			}
+			result, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      engine.Name,
+					Namespace: engine.Namespace,
+				},
+			})
+			require.NoError(t, err)
+			assert.False(t, result.Requeue)
+
+			t.Log("Fetching created WasmPlugin")
+			wasmPlugin := reconciler.buildWasmPlugin(engine)
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      wasmPlugin.GetName(),
+				Namespace: wasmPlugin.GetNamespace(),
+			}, wasmPlugin)
+			require.NoError(t, err)
+
+			t.Log("Verifying pluginConfig contains failure_policy")
+			spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
+			require.NoError(t, err)
+			require.True(t, found, "spec not found in WasmPlugin")
+
+			pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
+			require.NoError(t, err)
+			require.True(t, found, "pluginConfig not found in WasmPlugin spec")
+
+			failurePolicy, found, err := getNestedString(pluginConfig, "failure_policy")
+			require.NoError(t, err)
+			require.True(t, found, "failure_policy not found in pluginConfig")
+			assert.Equal(t, tt.expectedFailurePolicy, failurePolicy)
+		})
+	}
+}
+
+// getNestedMap retrieves a nested map from an unstructured object
+func getNestedMap(obj map[string]any, key string) (map[string]any, bool, error) {
+	val, found := obj[key]
+	if !found {
+		return nil, false, nil
+	}
+	mapVal, ok := val.(map[string]any)
+	if !ok {
+		return nil, false, assert.AnError
+	}
+	return mapVal, true, nil
+}
+
+// getNestedString retrieves a nested string from an unstructured object
+func getNestedString(obj map[string]any, key string) (string, bool, error) {
+	val, found := obj[key]
+	if !found {
+		return "", false, nil
+	}
+	strVal, ok := val.(string)
+	if !ok {
+		return "", false, assert.AnError
+	}
+	return strVal, true, nil
 }
 
 func TestEngineReconciler_ValidationRejection(t *testing.T) {
@@ -269,7 +372,7 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			t.Logf("Attempting to create Engine with invalid configuration: %s", tt.name)
 			engine := tt.engineFunc()
 			engine.Name = "validation-test-" + t.Name()
-			engine.Namespace = "default"
+			engine.Namespace = testNamespace
 
 			err := k8sClient.Create(ctx, engine)
 			require.Error(t, err)
