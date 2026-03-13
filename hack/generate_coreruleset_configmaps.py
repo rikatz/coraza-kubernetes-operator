@@ -22,8 +22,10 @@ from pathlib import Path
 from typing import List, Tuple, Set
 
 
-# Base rules configmap content (from config/samples/ruleset.yaml)
-# this Base rules also contains the extra SecAction for Coreruleset deployment
+# Base rules ConfigMap content used by the operator for the "base-rules" RuleSet.
+# This is the canonical base configuration (including extra SecAction directives for CoreRuleSet
+# deployment) from which examples like config/samples/ruleset.yaml should be derived and kept
+# in sync.
 #
 # NOTE: SecAuditLogRelevantStatus uses "^(40[0-3]|40[5-9]|4[1-9][0-9]|5[0-9][0-9])$" instead of
 # the Perl-style "^(?:5|4(?!04))" because Coraza/Envoy WASM uses RE2 regex engine which does not

@@ -5,7 +5,7 @@ testoverride:
   ignore:
     # Envoy not compatible tests
     '911100-5': 'Invalid HTTP method. Rejected by Envoy with Error 400'
-    '911100-7': 'Invalid HTTP method. Rejected by Envoy with Error 400' 
+    '911100-7': 'Invalid HTTP method. Rejected by Envoy with Error 400'
     '920100-4': 'Accepted by Envoy. Valid request. It is only disabled by default from Apache and Nginx'
     '920100-10': 'Invalid HTTP method. Rejected by Envoy with Error 400'
     '920100-14': 'Invalid HTTP method. Rejected by Envoy with Error 400'
@@ -68,7 +68,7 @@ testoverride:
     '922130-2': 'match_regex, likely different error message. To be investigated'
     '922130-7': 'match_regex, likely different error message. To be investigated'
     
-    # The tests below are failing on retry_once and needs to be investigated on the Coraza side
+    # The tests below are failing on retry_once and need to be investigated on the Coraza side
     '980170-1': 'using retry_once, that is failing on our environment'
     '980170-2': 'using retry_once, that is failing on our environment'
     '980170-3': 'using retry_once, that is failing on our environment'
