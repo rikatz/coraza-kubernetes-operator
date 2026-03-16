@@ -3,10 +3,11 @@ updates:
   # Dependencies listed in go.mod
   - package-ecosystem: "gomod"
     directories:
-    - "/"
-    - "/test/conformance"
-    - "/tools/cmd/github_issue_manager"
+      - "/"
+      - "/test/conformance"
+      - "/tools/cmd/github_issue_manager"
     schedule:
+      interval: "weekly"
       day: "monday"
       time: "07:00"
       timezone: "Canada/Eastern"
@@ -27,12 +28,17 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Canada/Eastern"
+    open-pull-requests-limit: 10
     labels:
       - docker
       - dependencies
-      - ok-to-test
-      - release-note-none
-  
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+
   #  Github actions updates
   - package-ecosystem: "github-actions"
     directory: "/"
