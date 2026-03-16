@@ -3,12 +3,15 @@
 maxmarkerretries: 10
 testoverride:
   ignore:
-    # Envoy not compatible tests
-    '911100-5': 'Invalid HTTP method. Rejected by Envoy with Error 400'
-    '911100-7': 'Invalid HTTP method. Rejected by Envoy with Error 400'
+    # Envoy not compatible tests - They would generate false positives
+    ## Tests 911100 to 920100 could be enabled using allow_methods on Envoy, but we don't want to make it permissive
+    '911100-5': 'Invalid HTTP method. Rejected by Envoy with Error 400 before reaching the filter'
+    '911100-7': 'Invalid HTTP method. Rejected by Envoy with Error 400 before reaching the filter'
     '920100-4': 'Accepted by Envoy. Valid request. It is only disabled by default from Apache and Nginx'
-    '920100-10': 'Invalid HTTP method. Rejected by Envoy with Error 400'
-    '920100-14': 'Invalid HTTP method. Rejected by Envoy with Error 400'
+    '920100-8': 'Accepted by Envoy. Valid request. It is only disabled by default from Apache'
+    '920100-10': 'Invalid HTTP method. Rejected by Envoy with Error 400 before reaching the filter'
+    '920100-14': 'Invalid HTTP method. Rejected by Envoy with Error 400 before reaching the filter'
+    ## The tests below are already secured by default by Envoy and rather they should be ignored (or enforce them on FTW to check for error 400)
     '920100-16': 'Invalid HTTP request line. Rejected by Envoy with Error 400'
     '920181-1': 'Content-Length with Transfer-Encoding chunked is rejected by Envoy with Error 400'
     '920210-2': 'Connection header is stripped out by Envoy'
@@ -19,55 +22,54 @@ testoverride:
     '920274-2': 'PL4 - False positive. Envoy Populates :path header, therefore invalid character are detected'
     '920274-3': 'PL4 - False positive. Envoy Populates :path header, therefore invalid character are detected'
     '920274-5': 'PL4 - False positive. Envoy Populates :path header, therefore invalid character are detected'
-    '932161-7': 'Referer header is sanitized by Envoy and removed from the request'
-    '932161-9': 'Referer header is sanitized by Envoy and removed from the request'
-    '932161-10': 'Referer header is sanitized by Envoy and removed from the request'
-    '932161-11': 'Referer header is sanitized by Envoy and removed from the request'
-    '932161-12': 'Referer header is sanitized by Envoy and removed from the request'
-    '932237-8': 'Referer header is sanitized by Envoy and removed from the request'
-    '932237-18': 'Referer header is sanitized by Envoy and removed from the request'
-    '932239-6': 'Referer header is sanitized by Envoy and removed from the request'
-    '932239-7': 'Referer header is sanitized by Envoy and removed from the request'
-    '932239-19': 'Referer header is sanitized by Envoy and removed from the request'
-    '932239-27': 'Referer header is sanitized by Envoy and removed from the request'
-    '932239-29': 'Referer header is sanitized by Envoy and removed from the request'  
-    '941101-1': 'Referer header is sanitized by Envoy and removed from the request'
-    '941110-4': 'Referer header is sanitized by Envoy and removed from the request'
-    '949110-4': 'Related to 920100. Invalid HTTP method. Rejected by Envoy with Error 400'
+    '920274-6': 'PL4 - False positive. Envoy Populates :path header, therefore invalid character are detected'
+    '932161-7': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932161-9': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932161-10': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932161-11': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932161-12': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932237-4': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932237-12': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932239-6': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932239-7': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932239-19': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932239-27': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '932239-29': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '941101-1': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '941110-4': 'Referer header is sanitized by Envoy due to invalid characters and removed from the request before reaching the filter'
+    '949110-4': 'Invalid HTTP method. Rejected by Envoy with Error 400 before reaching the filter'
+
+    # Rules that are false positive due to early detection / different outputs
+    '932200-13': 'Detected by early rules'
+    '949110-2': 'False positive at PL4. Benign request triggers anomaly score with blocking_paranoia_level=4'
+    '949110-3': 'False positive at PL4. Benign request triggers anomaly score with blocking_paranoia_level=4'
 
     # coraza-proxy-wasm not compatible tests
     '920280-1': 'Rule 920280 matches missing Host. coraza-proxy-wasm crafts it from :authority'
     '920280-3': 'Rule 920280 matches missing Host. coraza-proxy-wasm crafts it from :authority'
     '920290-1': 'Rule 920290 matches empty Host. coraza-proxy-wasm crafts it from :authority'
+    '920290-4': 'Rule 920290 matches empty Host. coraza-proxy-wasm crafts it from :authority'
 
-    # Rules working, tests excluded for different expected output
-    '920270-4': 'Log contains 920270. Test has log_contains disabled.'
-
-    # Coraza related issues
-    '920171-2': 'Rule 920171 not detected. GET/HEAD with body. Coraza side'
-    '920171-3': 'Rule 920171 not detected. GET/HEAD with body. Coraza side'
-    '920430-3': 'Rule 920430 not detected. Proto version. Coraza side'
-    '920430-8': 'Rule 920430 not detected. Proto version. Coraza side'
-    '920430-9': 'Rule 920430 not detected. Proto version. Coraza side'
+    # Coraza related issues that needs to be fixed
+    '920171-2': 'Rule 920171 not detected. GET/HEAD with body. Coraza or WASM side are failing'
+    '920171-3': 'Rule 920171 not detected. GET/HEAD with body. Coraza or WASM side are failing'
+    '920430-3': 'Rule 920430 not detected. Proto version. Coraza/WASM side may be allowing bad HTTP protocols'
+    '920430-5': 'Rule 920430 not detected. Proto version. Coraza/WASM side may be allowing bad HTTP protocols'
+    '920430-8': 'Rule 920430 not detected. Proto version. Coraza/WASM side may be allowing bad HTTP protocols'
+    '920430-9': 'Rule 920430 not detected. Proto version. Coraza/WASM side may be allowing bad HTTP protocols'
     '934120-23': 'Rule 934120 partially detected. With HTTP/1.1 Envoy return 400. With HTTP/2 Enclosed alphanumerics not detected. Coraza Side'
     '934120-24': 'Rule 934120 partially detected. With HTTP/1.1 Envoy return 400. With HTTP/2 Enclosed alphanumerics not detected. Coraza Side'
     '934120-25': 'Rule 934120 partially detected. With HTTP/1.1 Envoy return 400. With HTTP/2 Enclosed alphanumerics not detected. Coraza Side'
     '934120-26': 'Rule 934120 partially detected. With HTTP/1.1 Envoy return 400. With HTTP/2 Enclosed alphanumerics not detected. Coraza Side'
     '934120-39': 'Rule 934120 partially detected. With HTTP/1.1 Envoy return 400. With HTTP/2 Enclosed alphanumerics not detected. Coraza Side'
-    '932200-13': 'Unfortunate match inside logs against a different rule log. wip'
-
-    '920274-1': 'Host validation. Apache expects status 400, investigate Coraza-proxy-wasm behavior'
-    '920430-5': 'To be investigated Coraza side'
     '932300-10': 'To be investigated Coraza side, failing only with multiphase evaluation'
     '933120-2': 'To be investigated Coraza side, failing only with multiphase evaluation'
-
-    '921140-1': 'Expected 400. To be investigated'
-    '921250-1': 'Expected to match $Version in cookies, To be investigated Coraza side'
-    '921250-2': 'Expected to match $Version in cookies, To be investigated Coraza side'
-    '922130-1': 'match_regex, likely different error message. To be investigated'
-    '922130-2': 'match_regex, likely different error message. To be investigated'
-    '922130-7': 'match_regex, likely different error message. To be investigated'
     
+    # Rules that are not blocked by Envoy (code 400) but are blocked by the filter
+    '920270-4': 'Test expects envoy to block bad header but it is passed to the filter and blocked by the filter'
+    '920274-1': 'Test expects envoy to block bad header but it is passed to the filter and blocked by the filter'
+    '921140-1': 'Test expects envoy to block bad header but it is passed to the filter and blocked by the filter'
+ 
     # The tests below are failing on retry_once and need to be investigated on the Coraza side
     '980170-1': 'using retry_once, that is failing on our environment'
     '980170-2': 'using retry_once, that is failing on our environment'
@@ -75,4 +77,29 @@ testoverride:
     '959100-1': 'using retry_once, that is failing on our environment'
     '959100-3': 'using retry_once, that is failing on our environment'
 
+    # The tests below happens due to how Envoy consumes WASMPlugin during multipart (analized by claude)
+    '922110-1': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-2': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-3': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-4': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-7': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-8': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-9': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-11': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-15': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-20': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-21': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-23': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-24': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-25': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-26': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-28': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+    '922110-29': 'MULTIPART_PART_HEADERS: Works in WASM unit tests but fails in Envoy. Possible Envoy/WASM body handling issue'
+
+    # TO BE INVESTIGATED
+    '921250-1': 'Expected to match $Version in cookies, To be investigated Coraza side'
+    '921250-2': 'Expected to match $Version in cookies, To be investigated Coraza side'
+    '922130-1': 'match_regex, likely different error message. To be investigated'
+    '922130-2': 'match_regex, likely different error message. To be investigated'
+    '922130-7': 'match_regex, likely different error message. To be investigated'
 
