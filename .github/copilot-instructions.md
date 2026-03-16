@@ -74,10 +74,10 @@ Cross-namespace references between Engine, RuleSet, and ConfigMap are explicitly
 
 This operator manages Web Application Firewall rules. Security is paramount:
 
-- **Input validation:** All SecLang rules from ConfigMaps must be validated before caching. Invalid rules must be rejected with clear error messages in status conditions.
+ - **Input validation:** By default, SecLang rules from ConfigMaps are validated before being accepted, and invalid rules must be rejected with clear error messages in status conditions. The controller supports opting out of per-ConfigMap validation with the `coraza.io/validation: "false"` annotation; even when this is used, the aggregated RuleSet is still validated before caching and must be rejected on validation failure with appropriate status reporting.
 - **Namespace isolation:** Cross-namespace references are **explicitly prohibited**. Never weaken this constraint without security review.
 - **Secret handling:** If PRs introduce credential handling, ensure secrets are never logged or exposed in status fields.
-- **Denial of Service:** Large rule sets or excessive polling intervals can DoS the cache server. Review performance impacts of cache operations.
+- **Denial of Service:** Large rule sets or very frequent polling (small reload intervals) can DoS the cache server. Review performance impacts of cache operations and polling configuration.
 
 ## Documentation Requirements
 
