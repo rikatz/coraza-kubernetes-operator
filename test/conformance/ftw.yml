@@ -17,7 +17,7 @@ testoverride:
     # IMPACT: Positive for security, negative for conformance testing only
     # ---------------------------------------------------------------------------
 
-    # Invalid HTTP Methods/Requests - Rejected by Envoy (9 tests)
+    # Invalid HTTP Methods/Requests - Rejected by Envoy (6 tests)
     '911100-5': 'ENHANCED: Invalid HTTP method rejected by Envoy with 400'
     '911100-7': 'ENHANCED: Invalid HTTP method rejected by Envoy with 400'
     '920100-10': 'ENHANCED: Invalid HTTP method rejected by Envoy with 400'
@@ -83,7 +83,7 @@ testoverride:
     # IMPACT: Could allow attacks to bypass detection
     # ---------------------------------------------------------------------------
 
-    # Response Body Inspection - Envoy/Istio WASM limitation (76 tests)
+    # Response Body Inspection - Envoy/Istio WASM limitation (79 tests)
     # NOTE: Response bodies are NOT available for inspection in WASM environment
     # IMPACT: Data leakage, error messages, and web shells in responses are NOT detected
     # WORKAROUND: Use separate response logging/monitoring or deploy as reverse proxy
