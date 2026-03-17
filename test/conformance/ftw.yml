@@ -1,4 +1,7 @@
 # The overrides for logs and IP are set during FTW execution
+# This file was generated based on previous https://github.com/corazawaf/coraza-proxy-wasm/blob/main/ftw/ftw.yml
+# and additionally with investigation of violating rules.
+# Additionally Claude was used to verify and refine the failures vs Coreruleset and WASM behavior
 ---
 maxmarkerretries: 10
 testoverride:

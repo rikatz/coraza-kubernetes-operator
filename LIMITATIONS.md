@@ -1,6 +1,10 @@
 # Known Limitations
 
-This document describes behavioral differences and limitations when running Coraza WAF in the Envoy/Istio WASM environment compared to the CoreRuleSet v4.24.1 conformance tests.
+This document describes behavioral differences and limitations when running Coraza WAF with Istio using the WASM mode.
+	
+> **Note**: We are looking at solutions for these limitations in the [Engine Modes Epic]
+	
+[Engine Modes Epic]:https://github.com/networking-incubator/coraza-kubernetes-operator/issues/171
 
 ## Overview
 
@@ -172,32 +176,9 @@ These require further analysis to determine appropriate action:
 
 ---
 
-## Alternative Deployment Models
-
-If WASM limitations are unacceptable:
-
-### Reverse Proxy Deployment
-- Full response body inspection
-- Complete CRS compatibility
-- Additional infrastructure overhead
-- Separate from service mesh
-
-### Sidecar Container
-- Per-pod WAF protection
-- Full Coraza functionality
-- Higher resource usage
-- Not integrated with Istio/Gateway API
-
-### Hybrid Approach
-- WASM for request inspection (phase 1-2)
-- Separate monitoring for response data leakage
-- Custom Envoy Lua filter for critical response checks
-
----
-
 ## Version Information
 
-- **Coraza**: v3.x
+- **Coraza**: v3.3.3
 - **CoreRuleSet**: v4.24.1
 - **Envoy/Istio**: WASM filter environment
 - **coraza-proxy-wasm**: Latest
