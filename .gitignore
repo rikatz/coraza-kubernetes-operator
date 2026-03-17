@@ -39,6 +39,7 @@ dist/*
 !DEVELOPMENT.md
 !SECURITY.md
 !RELEASE.md
+!LIMITATIONS.md
 
 # templates
 !.github/*.md
