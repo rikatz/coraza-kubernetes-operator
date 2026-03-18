@@ -223,9 +223,12 @@ This uses `hack/generate_coreruleset_configmaps.py` to:
 The script automatically passes the CoreRuleSet version (from `CORERULESET_VERSION`) and supports
 additional flags (passed via `CORERULESET_EXTRA_FLAGS`):
 
+- `--version` - CoreRuleSet version (required) - accepts both `4.24.1` and `v4.24.1` formats
 - `--ignore-rules` - Comma-separated list of rule IDs to exclude (e.g., `"949110,949111,980130"`)
 - `--ignore-pmFromFile` - Ignore rules containing `@pmFromFile` directives (not supported by Coraza)
 - `--include-test-rule` - Include the X-CRS-Test rule in the base rules ConfigMap
+
+The version is automatically normalized (leading 'v' is stripped) and validated before use.
 
 **Examples:**
 
@@ -271,13 +274,19 @@ make NAMESPACE=my-namespace coraza.coreruleset
 The operator uses the [coraza-proxy-wasm](https://github.com/networking-incubator/coraza-proxy-wasm)
 plugin, which runs inside Envoy/Istio.
 
+This section describes how to build **the WASM plugin itself** in the separate
+[`coraza-proxy-wasm`](https://github.com/networking-incubator/coraza-proxy-wasm) repository.
+It does **not** change the Go version required to build this operator. For the operator,
+always use the Go version declared in this repository's `go.mod`.
+
 ## Prerequisites
 
-> **Critical**: You MUST use the exact versions specified below. Using different versions
-> will result in build failures or runtime incompatibilities.
+> **Critical**: The toolchain versions in this section apply to the
+> **coraza-proxy-wasm** repository. Using versions other than those required by that
+> repository may result in build failures or runtime incompatibilities for the plugin.
 
-- **TinyGo**: `0.34.0` (required - no other version)
-- **Go toolchain**: `1.23.8` (required - no other version)
+- **TinyGo**: `0.34.0` (plugin build requirement; see the coraza-proxy-wasm docs for updates)
+- **Go toolchain**: as required by the `coraza-proxy-wasm` repo (currently Go `1.23.8`)
 
 ## Building from Source
 
@@ -299,6 +308,8 @@ To build a custom WASM plugin:
    ```
 
 3. Build the WASM module with the exact Go version:
+3. Build the WASM module using the Go version required by the `coraza-proxy-wasm`
+   repository (see its `go.mod`; at the time of writing this is Go `1.23.8`):
 
    ```bash
    GOTOOLCHAIN=go1.23.8 go run mage.go build

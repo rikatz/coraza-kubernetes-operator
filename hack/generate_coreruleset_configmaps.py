@@ -46,13 +46,26 @@ def get_base_rules_configmap(crs_version: str) -> str:
     Generate the base rules ConfigMap with the specified CRS version.
 
     Args:
-        crs_version: CoreRuleSet version (e.g., "4.24.1")
+        crs_version: CoreRuleSet version (e.g., "4.24.1" or "v4.24.1")
 
     Returns:
         The base rules ConfigMap as a string
+
+    Raises:
+        ValueError: If the version format is invalid
     """
+    # Normalize: strip optional leading 'v'
+    normalized_version = crs_version.lstrip('v')
+
+    # Validate format: should be digits separated by dots (e.g., "4.24.1")
+    if not re.match(r'^\d+(\.\d+)*$', normalized_version):
+        raise ValueError(
+            f"Invalid CoreRuleSet version format: '{crs_version}'. "
+            f"Expected format: digits and dots (e.g., '4.24.1' or 'v4.24.1')"
+        )
+
     # Convert version to setup version format (e.g., "4.24.1" -> "4241")
-    crs_setup_version = crs_version.replace(".", "")
+    crs_setup_version = normalized_version.replace(".", "")
 
     return f"""apiVersion: v1
 kind: ConfigMap
@@ -125,7 +138,7 @@ data:
      t:none,\\
      nolog,\\
      tag:'OWASP_CRS',\\
-     ver:'OWASP_CRS/{crs_version}',\\
+     ver:'OWASP_CRS/{normalized_version}',\\
      setvar:tx.early_blocking=1"
     SecAction \\
      "id:900990,\\
@@ -134,7 +147,7 @@ data:
      t:none,\\
      nolog,\\
      tag:'OWASP_CRS',\\
-     ver:'OWASP_CRS/{crs_version}',\\
+     ver:'OWASP_CRS/{normalized_version}',\\
      setvar:tx.crs_setup_version={crs_setup_version}"
 """
 
