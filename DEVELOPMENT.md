@@ -307,7 +307,6 @@ To build a custom WASM plugin:
    tinygo version  # Must show: tinygo version 0.34.0
    ```
 
-3. Build the WASM module with the exact Go version:
 3. Build the WASM module using the Go version required by the `coraza-proxy-wasm`
    repository (see its `go.mod`; at the time of writing this is Go `1.23.8`):
 
