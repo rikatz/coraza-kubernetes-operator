@@ -84,6 +84,11 @@ Documentation is available in the [wiki].
 
 [wiki]:https://github.com/networking-incubator/coraza-kubernetes-operator/wiki
 
+## Development
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for build instructions, test suites,
+and the source-of-truth / generation pipeline reference.
+
 ## Contributing
 
 Contributions are welcome!

@@ -82,22 +82,97 @@ Once you've verified the release, we need to tag the container image appropriate
 
 ### Step 4 - Container Image Tagging
 
-For stable releases (non-prerelease) tag the image as `latest` manually:
+The release workflow pushes the operator image tagged as the git tag
+(e.g. `v0.1.1`). The OLM bundle references the image by its immutable
+digest, so the tag does not affect OLM installs.
+
+For stable (non-pre-release) versions, tag the image as `latest` before
+publishing the release:
 
 ```console
-# Pull the image
 docker pull ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1
-
-# For stable (non-pre-release) versions, also tag as latest
 docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1 ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
-
-# Push the final tags
 docker push ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
 ```
 
-> **Warning**: Do **not** push the `latest` until you are confident the release
-> is correct. Pre-release versions (`v0.x.x`, `-alpha`, `-beta`, `-rc`) should
-> **not** be tagged as `latest`.
+> **Warning**: Do **not** push the `latest` tag until you are confident the
+> release is correct. Pre-release versions (`v0.x.x`, `-alpha`, `-beta`,
+> `-rc`) should **not** be tagged as `latest`.
+
+### OLM (Operator Lifecycle Manager)
+
+The release workflow builds and pushes three container images. Two of them
+are specific to OLM:
+
+```
+  Operator image (:v0.2.0)
+       │
+       │  generate_bundle.py (make bundle)
+       │  Renders Helm chart, extracts Deployment/RBAC/CRDs,
+       │  injects into CSV template (image pinned by digest)
+       ▼
+  Bundle image (:v0.2.0)
+  ┌─────────────────────┐
+  │ manifests/          │  CSV, CRDs, Service, etc.
+  │ metadata/           │  OLM annotations
+  │ tests/scorecard/    │  scorecard config
+  └─────────────────────┘
+       │
+       │  opm render (inside catalog docker build)
+       │  Pulls bundle image, extracts full content
+       ▼
+  Catalog image (:v0.2.0)
+  ┌─────────────────────┐
+  │ catalog.yaml        │  olm.package + olm.channel
+  │ + rendered bundles  │  full CSV/CRD content from opm render
+  └─────────────────────┘
+       │
+       │  deployed as CatalogSource CR
+       ▼
+  OLM / OperatorHub UI
+```
+
+**What the release workflow does automatically:**
+
+1. `make bundle` — generates bundle manifests from the Helm chart
+2. `make bundle.build bundle.push` — builds and pushes the bundle image
+3. `make catalog.update` — adds the new version to `catalog.yaml` channel entries
+   (with `replaces` pointing to the previous version)
+4. `make catalog.build catalog.push` — builds the catalog image (runs `opm render`
+   inside the Docker build to pull each bundle image and embed its full content)
+
+**Key files:**
+
+| File | Role |
+|---|---|
+| `bundle/base/csv-template.yaml` | CSV template — edit to change OLM metadata |
+| `hack/generate_bundle.py` | Generates bundle from Helm chart + CSV template |
+| `catalog/coraza-kubernetes-operator/catalog.yaml` | Package and channel definitions (no bundle content) |
+| `hack/update_catalog.py` | Adds new versions to catalog channel entries |
+| `catalog/Dockerfile` | Multi-stage build: uses `opm render` to embed bundle content |
+
+**What needs manual attention:**
+
+- **`catalog.yaml` must be committed before tagging the release.** The release
+  workflow runs `catalog.update` in its working tree but does **not** commit the
+  result back to the repository. If you skip this step, the next release will
+  start from a stale checkout and the OLM upgrade chain will break — each
+  release's catalog will have no `replaces` link to the previous version,
+  making every version an independent install instead of an upgrade.
+
+  Before tagging, run:
+
+  ```console
+  make catalog.update VERSION=vX.Y.Z
+  git add catalog/coraza-kubernetes-operator/catalog.yaml
+  git commit -m "catalog: add vX.Y.Z to OLM channel"
+  ```
+
+  Automating this commit-back step is tracked in
+  https://github.com/networking-incubator/coraza-kubernetes-operator/issues/184.
+
+- If the CSV template needs changes (description, icon, install modes, etc.),
+  edit `bundle/base/csv-template.yaml` before the release.
 
 ### Step 5 - Publishing & Announcement
 

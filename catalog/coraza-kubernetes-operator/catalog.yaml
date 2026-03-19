@@ -1,0 +1,9 @@
+---
+schema: olm.package
+name: coraza-kubernetes-operator
+defaultChannel: alpha
+---
+schema: olm.channel
+package: coraza-kubernetes-operator
+name: alpha
+entries: []

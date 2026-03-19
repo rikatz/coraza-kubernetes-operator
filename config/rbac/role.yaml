@@ -19,6 +19,7 @@ rules:
   - pods
   verbs:
   - list
+  - watch
 - apiGroups:
   - ""
   - events.k8s.io
@@ -27,6 +28,12 @@ rules:
   verbs:
   - create
   - patch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
 - apiGroups:
   - coordination.k8s.io
   resources:
@@ -58,6 +65,16 @@ rules:
   verbs:
   - list
   - watch
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - destinationrules
+  - serviceentries
+  verbs:
+  - create
+  - get
+  - patch
+  - update
 - apiGroups:
   - waf.k8s.coraza.io
   resources:
