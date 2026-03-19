@@ -82,7 +82,7 @@ Environment variables:
 
 ### Conformance Tests
 
-Run CoreRuleSet conformance tests using the [go-ftw](https://github.com/coreruleset/go-ftw) framework (requires a KIND cluster - see [Setup](#setup)):
+Run CoreRuleSet conformance tests using the [go-ftw](https://github.com/coreruleset/go-ftw) framework (often run a KIND cluster - see [Setup](#setup)):
 
 ```bash
 make test.conformance
@@ -180,7 +180,7 @@ Example scenarios for the v0.2.0 validation issues live in `test/integration/`:
 
 The project includes tools for testing and development with the OWASP CoreRuleSet.
 
-> **Important**: This project does **not** provide or maintain CoreRuleSet rules.
+> **Important**: This project does **not** provide, maintain or support CoreRuleSet rules.
 > We support deploying and enforcing CoreRuleSet (or any SecLang-compatible rules),
 > but users must supply their own rulesets. The tools below are for **testing and
 > development purposes only**.
