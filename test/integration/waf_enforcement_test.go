@@ -102,6 +102,10 @@ func TestAllowPolicyOnFailure(t *testing.T) {
 		FailurePolicy: wafv1alpha1.FailurePolicyAllow,
 	})
 
+	s.Step("verify engine reconciled and WasmPlugin exists")
+	s.ExpectEngineReady(ns, "engine")
+	s.ExpectWasmPluginExists(ns, "coraza-engine-engine")
+
 	s.Step("deploy backend and route")
 	s.CreateEchoBackend(ns, "echo")
 	s.CreateHTTPRoute(ns, "route", "gw", "echo")
