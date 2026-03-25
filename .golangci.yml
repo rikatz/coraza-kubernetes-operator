@@ -48,6 +48,10 @@ formatters:
   enable:
     - gofmt
     - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/networking-incubator/coraza-kubernetes-operator
   exclusions:
     generated: lax
     paths:
