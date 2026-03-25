@@ -53,7 +53,7 @@ func (r *testRecorder) WithLogger(logger klog.Logger) events.EventRecorderLogger
 }
 
 // -----------------------------------------------------------------------------
-// Fake Event Recorder (captures events for assertions)
+// Fake Event Recorder
 // -----------------------------------------------------------------------------
 
 // RecordedEvent holds a single event captured by FakeRecorder.

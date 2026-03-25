@@ -1,3 +1,7 @@
+# ------------------------------------------------------------------------------
+# Build
+# ------------------------------------------------------------------------------
+
 ARG OPM_VERSION=v1.64.0
 
 FROM quay.io/operator-framework/opm:${OPM_VERSION} AS opm
@@ -14,9 +18,13 @@ COPY bundles/ /tmp/bundles/
 
 ARG BUNDLE_IMGS
 RUN for img in ${BUNDLE_IMGS}; do \
-      /bin/opm render "$img" -o yaml >> /configs/coraza-kubernetes-operator/catalog.yaml; \
+    /bin/opm render "$img" -o yaml >> /configs/coraza-kubernetes-operator/catalog.yaml; \
     done && \
     /bin/opm validate /configs
+
+# ------------------------------------------------------------------------------
+# Final
+# ------------------------------------------------------------------------------
 
 FROM opm
 

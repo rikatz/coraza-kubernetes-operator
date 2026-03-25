@@ -5,6 +5,8 @@
 *.so
 *.dylib
 bin/*
+manager
+!cmd/manager
 
 # Container files
 Dockerfile.cross

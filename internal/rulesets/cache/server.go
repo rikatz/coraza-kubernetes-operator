@@ -31,26 +31,28 @@ import (
 // Constants
 // -----------------------------------------------------------------------------
 
-// TimestampFormat is the RFC3339 format with milliseconds used for all timestamps
-const TimestampFormat = time.RFC3339Nano
+const (
+	// TimestampFormat is the RFC3339 format with milliseconds used for all timestamps
+	TimestampFormat = time.RFC3339Nano
 
-// CacheGCInterval is how often to check for and remove stale cache entries
-const CacheGCInterval = 5 * time.Minute
+	// CacheGCInterval is how often to check for and remove stale cache entries
+	CacheGCInterval = 5 * time.Minute
 
-// CacheMaxAge is the maximum age of a cache entry before it's considered stale
-const CacheMaxAge = 24 * time.Hour
+	// CacheMaxAge is the maximum age of a cache entry before it's considered stale
+	CacheMaxAge = 24 * time.Hour
 
-// CacheMaxSize is the maximum total size of all cached rules in bytes (100MB)
-const CacheMaxSize = 100 * 1024 * 1024
+	// CacheMaxSize is the maximum total size of all cached rules in bytes (100MB)
+	CacheMaxSize = 100 * 1024 * 1024
 
-// MaxHeaderSize is the maximum size of HTTP request headers (64KB)
-const MaxHeaderSize = 64 * 1024
+	// MaxHeaderSize is the maximum size of HTTP request headers (64KB)
+	MaxHeaderSize = 64 * 1024
 
-// MaxBodySize is the maximum size of HTTP request bodies (0 bytes - no body expected)
-const MaxBodySize = 0
+	// MaxBodySize is the maximum size of HTTP request bodies (0 bytes - no body expected)
+	MaxBodySize = 0
 
-// GracefulShutdownTimeout is the max time to drain existing connections on shutdown
-const GracefulShutdownTimeout = 10 * time.Second
+	// GracefulShutdownTimeout is the max time to drain existing connections on shutdown
+	GracefulShutdownTimeout = 10 * time.Second
+)
 
 // -----------------------------------------------------------------------------
 // API Response Types

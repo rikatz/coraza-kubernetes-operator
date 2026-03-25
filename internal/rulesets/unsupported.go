@@ -278,7 +278,7 @@ func buildRegistry() map[int]UnsupportedRule {
 }
 
 // -----------------------------------------------------------------------------
-// Private Utilities
+// Helpers
 // -----------------------------------------------------------------------------
 
 // ruleIDsByTier returns sorted rule IDs for the given tier.

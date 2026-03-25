@@ -33,6 +33,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// -----------------------------------------------------------------------------
+// Scenario - Consts + Vars
+// -----------------------------------------------------------------------------
+
 const (
 	// DefaultTimeout is the default timeout for polling operations.
 	DefaultTimeout = 60 * time.Second
@@ -44,6 +48,10 @@ const (
 // namespaceMu serializes namespace creation to reduce Istio CA certificate
 // signing contention when many parallel tests create namespaces simultaneously.
 var namespaceMu sync.Mutex
+
+// -----------------------------------------------------------------------------
+// Scenario - Test Life-Cycle
+// -----------------------------------------------------------------------------
 
 // Scenario manages the lifecycle of a single test scenario: namespace
 // creation, resource cleanup, and step tracking.
@@ -237,7 +245,7 @@ func (s *Scenario) StreamGatewayLogs(namespace, gatewayName string) io.ReadClose
 }
 
 // -----------------------------------------------------------------------------
-// Failure Diagnostics
+// Scenario - Failure Diagnostics
 // -----------------------------------------------------------------------------
 
 // dumpOnFailure collects diagnostic information when the test has failed.

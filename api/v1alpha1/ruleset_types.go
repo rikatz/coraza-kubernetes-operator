@@ -20,6 +20,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// -----------------------------------------------------------------------------
+// RuleSet - Schema Registration
+// -----------------------------------------------------------------------------
+
+func init() {
+	SchemeBuilder.Register(&RuleSet{}, &RuleSetList{})
+}
+
+// -----------------------------------------------------------------------------
+// RuleSet - Constants
+// -----------------------------------------------------------------------------
+
 const (
 	// RuleDataSecretType is the expected type for a Secret that contains rule data files.
 	RuleDataSecretType = "coraza/data"
@@ -28,23 +40,6 @@ const (
 	// rules degredation on a RuleSet (it will still log).
 	AnnotationSkipUnsupportedRulesCheck = "waf.k8s.coraza.io/skip-unsupported-rules-check"
 )
-
-// RuleSourceReference is a reference to a ConfigMap that contains WAF rules.
-type RuleSourceReference struct {
-	// name is the name of the ConfigMap in the same namespace as the RuleSet.
-	//
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name,omitempty"`
-}
-
-// -----------------------------------------------------------------------------
-// RuleSet - Schema Registration
-// -----------------------------------------------------------------------------
-
-func init() {
-	SchemeBuilder.Register(&RuleSet{}, &RuleSetList{})
-}
 
 // -----------------------------------------------------------------------------
 // RuleSet
@@ -123,6 +118,39 @@ type RuleSetSpec struct {
 }
 
 // -----------------------------------------------------------------------------
+// RuleSet - Cache Server
+// -----------------------------------------------------------------------------
+
+// RuleSetCacheServerConfig defines the configuration for the RuleSet cache server.
+type RuleSetCacheServerConfig struct {
+	// pollIntervalSeconds specifies how often the WAF should check for
+	// configuration updates. The value is specified in seconds.
+	//
+	// When omitted, this means the user has no opinion and the platform
+	// will choose a reasonable default, which is subject to change over time.
+	// The current default is 15 seconds.
+	//
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3600
+	// +optional
+	// +default=15
+	PollIntervalSeconds *int32 `json:"pollIntervalSeconds,omitempty"`
+}
+
+// -----------------------------------------------------------------------------
+// RuleSet - References
+// -----------------------------------------------------------------------------
+
+// RuleSourceReference is a reference to a ConfigMap that contains WAF rules.
+type RuleSourceReference struct {
+	// name is the name of the ConfigMap in the same namespace as the RuleSet.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name,omitempty"`
+}
+
+// -----------------------------------------------------------------------------
 // RuleSet - Status
 // -----------------------------------------------------------------------------
 
@@ -144,24 +172,4 @@ type RuleSetStatus struct {
 	// +patchMergeKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
-}
-
-// -----------------------------------------------------------------------------
-// RuleSet - Cache Server Types
-// -----------------------------------------------------------------------------
-
-// RuleSetCacheServerConfig defines the configuration for the RuleSet cache server.
-type RuleSetCacheServerConfig struct {
-	// pollIntervalSeconds specifies how often the WAF should check for
-	// configuration updates. The value is specified in seconds.
-	//
-	// When omitted, this means the user has no opinion and the platform
-	// will choose a reasonable default, which is subject to change over time.
-	// The current default is 15 seconds.
-	//
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=3600
-	// +optional
-	// +default=15
-	PollIntervalSeconds *int32 `json:"pollIntervalSeconds,omitempty"`
 }

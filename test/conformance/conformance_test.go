@@ -57,6 +57,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// Step 0: Get environment variables
 	// -------------------------------------------------------------------------
+
 	ruleLocation := os.Getenv("RULESET_PATH")
 	require.NotEmpty(t, ruleLocation, "RULESET_PATH must contain a path for a manifests of RuleSet to be deployed for tests")
 	testManifestsLocation := os.Getenv("TESTMANIFESTS_PATH")
@@ -82,6 +83,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// Step 1: Initialize Coreruleset conformance framework
 	// -------------------------------------------------------------------------
+
 	ignoreErrors := false
 	if v, ok := os.LookupEnv("IGNORE_TEST_MANIFEST_ERRORS"); ok {
 		parsed, err := strconv.ParseBool(v)
@@ -102,6 +104,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// Step 2: Set up a Gateway for this test
 	// -------------------------------------------------------------------------
+
 	s.Step("create gateway")
 	s.CreateGateway(ns, gwName)
 	s.ExpectGatewayProgrammed(ns, gwName)
@@ -112,6 +115,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// Step 3: Deploy CRS Coreruleset
 	// -------------------------------------------------------------------------
+
 	s.Step("deploy coreruleset-compatible rules")
 	// CRS contains rules that the operator flags as unsupported in WASM mode
 	// (see LIMITATIONS.md). Inject the skip annotation into the RuleSet manifest
@@ -150,6 +154,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// Step 5: Start logstreaming and proxy, and fix FTW configuration
 	// -------------------------------------------------------------------------
+
 	s.Step("start log streaming to file")
 	logStream := s.StreamGatewayLogs(ns, gwName)
 
@@ -237,6 +242,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// Step 6: Run FTW tests
 	// -------------------------------------------------------------------------
+
 	testOutput := buildOutput(t)
 	runnerConfig := config.NewRunnerConfiguration(cfg)
 	runnerConfig.ShowTime = false
@@ -256,6 +262,10 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	}
 
 }
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
 
 func loadTests(t *testing.T, manifestDir string, ignoreErrors bool) ([]*test.FTWTest, error) {
 	// sample from https://github.com/corazawaf/coraza/blob/main/testing/coreruleset/coreruleset_test.go#L235-L253

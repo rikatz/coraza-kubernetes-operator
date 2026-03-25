@@ -1,28 +1,24 @@
 # Sample: Coraza WAF with Istio Gateway
 
-This sample deploys a Coraza WAF Engine in front of a simple echo service
-using the Kubernetes Gateway API and Istio.
+Deploys a Coraza WAF Engine in front of a simple echo service using the
+Kubernetes Gateway API and Istio.
 
 ## What's included
 
-| File | Description |
-|------|-------------|
-| `ruleset.yaml` | ConfigMaps with SecRule directives (base config, SQLi, XSS, custom) and a `RuleSet` CR that aggregates them |
-| `engine.yaml` | `Engine` CR that references the RuleSet and configures the Istio WASM driver |
-| `gateway.yaml` | Kubernetes Gateway API `Gateway` using the Istio gateway class |
-| `httproute.yaml` | `HTTPRoute` that sends all traffic through the gateway to the echo service |
-| `echo.yaml` | A simple echo Deployment and Service to act as the backend |
+- `ruleset.yaml` — ConfigMaps with SecRule directives and a `RuleSet` CR that aggregates them
+- `engine.yaml` — `Engine` CR referencing the RuleSet, configured for the Istio WASM driver
+- `gateway.yaml` — Gateway API `Gateway` using the Istio gateway class
+- `httproute.yaml` — `HTTPRoute` routing traffic through the gateway to the echo service
+- `echo.yaml` — Simple echo Deployment + Service backend
 
 ## Prerequisites
 
-- A Kubernetes cluster with Istio installed
-- The coraza-kubernetes-operator running in the cluster
-- The Kubernetes Gateway API CRDs installed
+- Kubernetes cluster with Istio and Gateway API CRDs installed
+- coraza-kubernetes-operator running in the cluster
 
 ## Deploy
 
-> **Note**: The samples can be deployed to any namespace you choose. The
-> entire sample set must all be deployed to a _single_ namespace however.
+All samples must be deployed to the same namespace.
 
 ```bash
 kubectl apply -f config/samples/
@@ -30,37 +26,18 @@ kubectl apply -f config/samples/
 
 ## Test
 
-Port-forward to the gateway:
-
 ```bash
 kubectl port-forward svc/coraza-gateway-istio 8080:80
 ```
 
-Normal request (you should see a JSON output consisting of HTTP headers):
-
 ```bash
-curl http://localhost:8080/
+curl http://localhost:8080/                                  # normal request
+curl -I "http://localhost:8080/?q=evilmonkey"                # blocked (rule 3001, 403)
+curl "http://localhost:8080/?q=select+*+from+users"          # logged (rule 1001)
+curl "http://localhost:8080/?q=<script>alert(1)</script>"    # logged (rule 2001)
 ```
 
-Evil monkey (should be blocked by rule 3001, returns 403 Forbidden):
-
-```bash
-curl -I "http://localhost:8080/?q=evilmonkey"
-```
-
-SQLi attempt (works but get logged by rule 1001):
-
-```bash
-curl "http://localhost:8080/?q=select+*+from+users"
-```
-
-XSS attempt (works but get logged by rule 2001):
-
-```bash
-curl "http://localhost:8080/?q=<script>alert(1)</script>"
-```
-
-For all attempts above, you can inspect the gateway (Envoy) logs to see what gets logged by Coraza:
+Check gateway logs for Coraza output:
 
 ```bash
 kubectl logs deploy/coraza-gateway-istio

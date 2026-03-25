@@ -26,7 +26,18 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 )
 
-var fw *framework.Framework
+// -----------------------------------------------------------------------------
+// Vars
+// -----------------------------------------------------------------------------
+
+var (
+	// fw is the test framework instance, available to all tests in this package.
+	fw *framework.Framework
+)
+
+// -----------------------------------------------------------------------------
+// TestMain
+// -----------------------------------------------------------------------------
 
 func TestMain(m *testing.M) {
 	// E2E tests require a cluster to connect to.

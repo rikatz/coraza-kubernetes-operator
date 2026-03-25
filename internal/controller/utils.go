@@ -33,7 +33,7 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// Logging Utilities
+// Logging Helpers
 // -----------------------------------------------------------------------------
 
 // debugLevel is the go-logr level for debug/verbose logging
@@ -58,7 +58,7 @@ func logError(log logr.Logger, req ctrl.Request, kind string, err error, msg str
 }
 
 // -----------------------------------------------------------------------------
-// Status Condition Utilities
+// Status Condition Helpers
 // -----------------------------------------------------------------------------
 
 // setConditionTrue is a helper function to set metav1.Conditions to True.
@@ -109,7 +109,7 @@ func setStatusReady(log logr.Logger, req ctrl.Request, kind string, conditions *
 }
 
 // -----------------------------------------------------------------------------
-// Predicate Utilities
+// Predicate Helpers
 // -----------------------------------------------------------------------------
 
 // annotationChangedPredicate returns a predicate that triggers on Update events
@@ -129,7 +129,7 @@ func annotationChangedPredicate(key string) predicate.Predicate {
 }
 
 // -----------------------------------------------------------------------------
-// Kubernetes Client Operation Utilities
+// Client Operation Helpers
 // -----------------------------------------------------------------------------
 
 // fieldManager is the server-side apply field manager name for this operator.

@@ -20,25 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// RuleSetReference is a reference to a RuleSet resource.
-type RuleSetReference struct {
-	// name is the name of the RuleSet in the same namespace as the Engine.
-	//
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name,omitempty"`
-}
-
-// GatewayReference is a reference to a Gateway resource in the same namespace
-// as the Engine.
-type GatewayReference struct {
-	// name is the name of the Gateway in the same namespace as the Engine.
-	//
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name,omitempty"`
-}
-
 // -----------------------------------------------------------------------------
 // Engine - Schema Registration
 // -----------------------------------------------------------------------------
@@ -184,3 +165,26 @@ const (
 	// encounters errors.
 	FailurePolicyAllow FailurePolicy = "allow"
 )
+
+// -----------------------------------------------------------------------------
+// Engine - Reference Types
+// -----------------------------------------------------------------------------
+
+// RuleSetReference is a reference to a RuleSet resource.
+type RuleSetReference struct {
+	// name is the name of the RuleSet in the same namespace as the Engine.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name,omitempty"`
+}
+
+// GatewayReference is a reference to a Gateway resource in the same namespace
+// as the Engine.
+type GatewayReference struct {
+	// name is the name of the Gateway in the same namespace as the Engine.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name,omitempty"`
+}

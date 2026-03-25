@@ -288,7 +288,7 @@ func TestFormatUnsupportedMessage_MultipleRules(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// Private Test Utilities
+// Test Helpers
 // -----------------------------------------------------------------------------
 
 // secRuleWithID returns a minimal SecLang rule with the given ID.

@@ -105,6 +105,10 @@ type IstioIntegrationConfig struct {
 	WorkloadSelector metav1.LabelSelector `json:"workloadSelector,omitempty"`
 }
 
+// -----------------------------------------------------------------------------
+// Engine Driver - Istio Integration Mode
+// -----------------------------------------------------------------------------
+
 // IstioIntegrationMode specifies what mechanism will be used to integrate the
 // WAF with Istio.
 //

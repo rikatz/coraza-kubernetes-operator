@@ -151,7 +151,7 @@ func toUnstructured(obj runtime.Object) *unstructured.Unstructured {
 }
 
 // -----------------------------------------------------------------------------
-// Resource Builders (exported for direct use or testing)
+// Resource Builders
 // -----------------------------------------------------------------------------
 
 // BuildGateway builds an unstructured Gateway object with Istio annotations.
