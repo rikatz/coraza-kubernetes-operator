@@ -26,6 +26,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// -----------------------------------------------------------------------------
+// Events
+// -----------------------------------------------------------------------------
+
 // EventMatch specifies criteria for matching Kubernetes events.
 // Empty fields are treated as wildcards (match any value).
 type EventMatch struct {
@@ -82,6 +86,10 @@ func (s *Scenario) ExpectNoEvent(namespace string, match EventMatch) {
 		}
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
 
 func matchesEvent(e eventsv1.Event, m EventMatch) bool {
 	if m.Type != "" && e.Type != m.Type {

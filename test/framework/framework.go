@@ -39,7 +39,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sync/atomic"
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -47,9 +46,19 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// portCounter allocates unique local ports for port forwarding.
-// Starts at 29000 to avoid conflicts with hard-coded ports in legacy tests.
-var portCounter uint32 = 29000
+// -----------------------------------------------------------------------------
+// Vars
+// -----------------------------------------------------------------------------
+
+var (
+	// portCounter allocates unique local ports for port forwarding.
+	// Starts at 29000 to avoid conflicts with hard-coded ports in legacy tests.
+	portCounter uint32 = 29000
+)
+
+// -----------------------------------------------------------------------------
+// Framework
+// -----------------------------------------------------------------------------
 
 // Framework provides cluster access and test utilities for integration tests.
 type Framework struct {
@@ -114,37 +123,4 @@ func New() (*Framework, error) {
 		DynamicClient: dynamicClient,
 		ClusterName:   clusterName,
 	}, nil
-}
-
-// AllocatePort returns the next available local port for port forwarding.
-func AllocatePort() string {
-	port := atomic.AddUint32(&portCounter, 1) - 1
-	return fmt.Sprintf("%d", port)
-}
-
-// KubeContext returns the kubectl context string for the cluster.
-// For kind clusters returns "kind-<name>". For external clusters returns "".
-func (f *Framework) KubeContext() string {
-	if f.ClusterName == "external" {
-		return ""
-	}
-	return fmt.Sprintf("kind-%s", f.ClusterName)
-}
-
-// Kubectl returns an exec.Cmd for running kubectl against the cluster
-// in the given namespace.
-func (f *Framework) Kubectl(namespace string, args ...string) *exec.Cmd {
-	return exec.Command("kubectl", f.kubectlArgs(namespace, args...)...)
-}
-
-func (f *Framework) kubectlArgs(namespace string, args ...string) []string {
-	cmdArgs := make([]string, 0, len(args)+4)
-	if ctx := f.KubeContext(); ctx != "" {
-		cmdArgs = append(cmdArgs, "--context", ctx)
-	}
-	if namespace != "" {
-		cmdArgs = append(cmdArgs, "-n", namespace)
-	}
-	cmdArgs = append(cmdArgs, args...)
-	return cmdArgs
 }
