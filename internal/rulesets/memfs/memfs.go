@@ -14,7 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils
+// Package memfs implements a simple, thread-safe in-memory filesystem
+package memfs
 
 import (
 	"bytes"
@@ -22,6 +23,10 @@ import (
 	"sync"
 	"time"
 )
+
+// -----------------------------------------------------------------------------
+// MemFS
+// -----------------------------------------------------------------------------
 
 // MemFS is a simple, thread-safe in-memory filesystem
 type MemFS struct {
@@ -60,6 +65,10 @@ func (m *MemFS) Open(name string) (fs.File, error) {
 		size:   int64(len(data)),
 	}, nil
 }
+
+// -----------------------------------------------------------------------------
+// memFile
+// -----------------------------------------------------------------------------
 
 // memFile wraps bytes.Reader to satisfy the fs.File interface
 type memFile struct {
