@@ -220,6 +220,9 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: install python dependencies
+        run: pip install PyYAML
+
       - name: install kubectl
         uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
         with:
