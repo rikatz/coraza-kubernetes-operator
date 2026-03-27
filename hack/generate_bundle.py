@@ -42,7 +42,8 @@ def helm_template(chart_dir: str, release_name: str, namespace: str,
         f"--namespace {namespace} "
         f"--kube-version {kube_version} "
         f"--version {version} "
-        f"--set openshift.enabled=true"
+        f"--set openshift.enabled=true "
+        f"--set istio.revision=openshift-gateway"
     )
     result = run(cmd, capture_output=True)
     docs = list(yaml.safe_load_all(result.stdout))

@@ -320,6 +320,7 @@ def deploy_coraza_operator(context: str) -> None:
         f"--set image.repository={image_repo} "
         f"--set image.tag={image_tag} "
         f"--set createNamespace=false "
+        f"--set istio.revision=coraza "
         f"--kube-context {context}"
     )
 

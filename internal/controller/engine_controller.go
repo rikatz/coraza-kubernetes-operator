@@ -65,6 +65,7 @@ type EngineReconciler struct {
 
 	client.Client
 	ruleSetCacheServerCluster string
+	istioRevision             string
 }
 
 // SetupWithManager sets up the controller with the Manager.

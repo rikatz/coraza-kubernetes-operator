@@ -24,7 +24,8 @@ metrics:
     enabled: false
 
 istio:
-  revision: "coraza"
+  # When empty, the operator does not set an Istio revision label on managed resources.
+  revision: ""
 
 openshift:
   enabled: false

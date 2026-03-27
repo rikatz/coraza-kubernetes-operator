@@ -155,21 +155,26 @@ func toUnstructured(obj runtime.Object) *unstructured.Unstructured {
 // -----------------------------------------------------------------------------
 
 // BuildGateway builds an unstructured Gateway object with Istio annotations.
-func BuildGateway(namespace, name, gatewayClassName string) *unstructured.Unstructured {
+// If f.IstioGatewayRevision is non-empty, sets metadata.labels["istio.io/rev"] to
+// that value (from ISTIO_GATEWAY_REVISION when using framework.New).
+func (f *Framework) BuildGateway(namespace, name, gatewayClassName string) *unstructured.Unstructured {
+	meta := map[string]interface{}{
+		"name":      name,
+		"namespace": namespace,
+		"annotations": map[string]interface{}{
+			"networking.istio.io/service-type": "ClusterIP",
+		},
+	}
+	if f.IstioGatewayRevision != "" {
+		meta["labels"] = map[string]interface{}{
+			"istio.io/rev": f.IstioGatewayRevision,
+		}
+	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "Gateway",
-			"metadata": map[string]interface{}{
-				"name":      name,
-				"namespace": namespace,
-				"labels": map[string]interface{}{
-					"istio.io/rev": "coraza",
-				},
-				"annotations": map[string]interface{}{
-					"networking.istio.io/service-type": "ClusterIP",
-				},
-			},
+			"metadata":   meta,
 			"spec": map[string]interface{}{
 				"gatewayClassName": gatewayClassName,
 				"listeners": []interface{}{
@@ -373,7 +378,7 @@ func (s *Scenario) CreateGatewayWithClass(namespace, name, gatewayClassName stri
 		s.T.Logf("ServiceAccount %s/%s already exists", namespace, saName)
 	}
 
-	obj := BuildGateway(namespace, name, gatewayClassName)
+	obj := s.F.BuildGateway(namespace, name, gatewayClassName)
 	_, err = s.F.DynamicClient.Resource(GatewayGVR).Namespace(namespace).Create(
 		ctx, obj, metav1.CreateOptions{},
 	)

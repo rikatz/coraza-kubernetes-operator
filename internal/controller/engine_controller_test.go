@@ -58,6 +58,27 @@ func TestEngineReconciler_ReconcileNotFound(t *testing.T) {
 	assert.False(t, result.Requeue)
 }
 
+func TestEngineReconciler_BuildWasmPlugin_IstioRevisionLabel(t *testing.T) {
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:      "rev-label-engine",
+		Namespace: testNamespace,
+	})
+
+	withRev := &EngineReconciler{
+		ruleSetCacheServerCluster: "test-cluster",
+		istioRevision:             "canary",
+	}
+	w := withRev.buildWasmPlugin(engine)
+	assert.Equal(t, "canary", w.GetLabels()["istio.io/rev"])
+
+	noRev := &EngineReconciler{
+		ruleSetCacheServerCluster: "test-cluster",
+	}
+	w2 := noRev.buildWasmPlugin(engine)
+	_, has := w2.GetLabels()["istio.io/rev"]
+	assert.False(t, has, "istio.io/rev should not be set when revision is empty")
+}
+
 func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
 	ctx := context.Background()
 

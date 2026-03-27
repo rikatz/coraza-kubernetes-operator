@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -73,6 +74,11 @@ type Framework struct {
 
 	// ClusterName is the cluster identifier (kind cluster name or "external").
 	ClusterName string
+
+	// IstioGatewayRevision is the value for metadata.labels["istio.io/rev"] on
+	// Gateways built by BuildGateway. Empty means omit the label (default-revision
+	// Istio). Set via ISTIO_GATEWAY_REVISION (e.g. "coraza" for kind, "openshift-gateway" for OCP).
+	IstioGatewayRevision string
 }
 
 // New creates a Framework by detecting the cluster environment.
@@ -118,9 +124,10 @@ func New() (*Framework, error) {
 	}
 
 	return &Framework{
-		RestConfig:    config,
-		KubeClient:    kubeClient,
-		DynamicClient: dynamicClient,
-		ClusterName:   clusterName,
+		RestConfig:           config,
+		KubeClient:           kubeClient,
+		DynamicClient:        dynamicClient,
+		ClusterName:          clusterName,
+		IstioGatewayRevision: strings.TrimSpace(os.Getenv("ISTIO_GATEWAY_REVISION")),
 	}, nil
 }

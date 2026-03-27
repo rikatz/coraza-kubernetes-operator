@@ -17,6 +17,10 @@ CONTAINER_TOOL ?= docker
 # Use a non-empty default for kind-based integration tests; override or clear
 # it when running against an external cluster like OCP.
 KIND_CLUSTER_NAME ?= coraza-kubernetes-operator-integration
+# Test Gateways get metadata.labels["istio.io/rev"] when non-empty (see test/framework).
+# Default coraza matches kind + operator Helm in hack/kind_cluster.py. For OpenShift,
+# use openshift-gateway (match operator istio.revision) or empty for default-revision Istio.
+ISTIO_GATEWAY_REVISION ?= coraza
 ISTIO_VERSION ?= 1.28.2
 METALLB_VERSION ?= 0.15.3
 METALLB_POOL_SIZE ?= 128 # Defines the size of MetalLB pool, when being used
@@ -111,7 +115,8 @@ deploy: helm.sync ## Deploy operator into the cluster using Helm
 		--namespace $(HELM_RELEASE_NAMESPACE) \
 		--create-namespace \
 		--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
-		--set image.tag=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG)
+		--set image.tag=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG) \
+		--set istio.revision=$(ISTIO_GATEWAY_REVISION)
 
 .PHONY: undeploy
 undeploy: ## Remove operator from the cluster using Helm
@@ -195,12 +200,12 @@ test.coverage: generate
 .PHONY: test.integration
 test.integration:
 	go clean -testcache
-	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} go test -tags=integration ./test/integration/... -v
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=integration ./test/integration/... -v
 
 .PHONY: test.e2e
 test.e2e:
 	go clean -testcache
-	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} go test -tags=e2e ./test/e2e/... -v
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=e2e ./test/e2e/... -v
 
 .PHONY: test.tools
 test.tools:
@@ -256,7 +261,7 @@ coreruleset.verify-parity:
 
 .PHONY: test.conformance
 test.conformance: coreruleset.verify-parity
-	cd test/conformance &&  $(CONFORMANCE_EXTRA_FLAGS) FTW_CONFIG=$(shell pwd)/test/conformance/ftw.yml TESTMANIFESTS_PATH=$(CORERULESET_DIR)/tests/tests RULESET_PATH=$(LOCALRULES)/rules.yaml KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} ISTIO_VERSION=${ISTIO_VERSION} go test -tags=conformance ./... -v
+	cd test/conformance &&  $(CONFORMANCE_EXTRA_FLAGS) FTW_CONFIG=$(shell pwd)/test/conformance/ftw.yml TESTMANIFESTS_PATH=$(CORERULESET_DIR)/tests/tests RULESET_PATH=$(LOCALRULES)/rules.yaml KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=conformance ./... -v
 
 # -------------------------------------------------------------------------------
 # OLM Bundle

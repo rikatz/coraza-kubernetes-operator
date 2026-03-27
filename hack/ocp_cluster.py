@@ -234,6 +234,7 @@ def deploy_coraza_operator(args):
         f"--set image.repository={pull_repo} "
         f"--set image.tag={source_tag} "
         f"--set openshift.enabled=true "
+        f"--set istio.revision=openshift-gateway "
         f"--set createNamespace=false"
     )
 

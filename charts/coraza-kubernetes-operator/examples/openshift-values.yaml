@@ -1,6 +1,9 @@
 openshift:
   enabled: true
 
+istio:
+  revision: openshift-gateway
+
 metrics:
   serviceMonitor:
     enabled: true

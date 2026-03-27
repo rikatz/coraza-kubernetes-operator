@@ -21,6 +21,7 @@ The framework has three layers:
 |---|---|
 | `KIND_CLUSTER_NAME` | Connects to a kind cluster via `kind get kubeconfig` |
 | `KUBECONFIG` | Fallback: connects via standard kubeconfig |
+| `ISTIO_GATEWAY_REVISION` | If set, `CreateGateway` / `BuildGateway` add `metadata.labels["istio.io/rev"]` with this value. Empty omits the label (default-revision Istio). Kind Makefile targets default to `coraza`; on OpenShift use e.g. `openshift-gateway` to match your operator Helm `istio.revision`, or leave unset/empty when not using a named revision. |
 | `CORAZA_WASM_IMAGE` | Override the default WASM plugin OCI image |
 | `ECHO_IMAGE` | Override the default echo backend image |
 | `ARTIFACTS_DIR` | If set, write diagnostic dumps (YAML, logs, events) to this directory on test failure |
@@ -127,7 +128,7 @@ Exported builder functions for use outside scenarios:
 
 | Function | Purpose |
 |---|---|
-| `BuildGateway(ns, name)` | Build unstructured Gateway |
+| `fw.BuildGateway(ns, name, class)` | Build unstructured Gateway (`ISTIO_GATEWAY_REVISION` sets `istio.io/rev` when non-empty) |
 | `BuildRuleSet(ns, name, rules)` | Build unstructured RuleSet |
 | `BuildEngine(ns, name, opts)` | Build unstructured Engine |
 | `BuildHTTPRoute(ns, name, gw, backend)` | Build unstructured HTTPRoute |

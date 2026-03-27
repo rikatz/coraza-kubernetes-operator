@@ -160,6 +160,15 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine) *unstruct
 		Kind:    "WasmPlugin",
 	})
 
+	if r.istioRevision != "" {
+		labels := wasmPlugin.GetLabels()
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels["istio.io/rev"] = r.istioRevision
+		wasmPlugin.SetLabels(labels)
+	}
+
 	return wasmPlugin
 }
 
