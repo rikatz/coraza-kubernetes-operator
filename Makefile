@@ -216,7 +216,7 @@ test.tools:
 # Coraza Coreruleset targets
 # -------------------------------------------------------------------------------
 
-CORERULESET_VERSION ?= v4.24.1
+CORERULESET_VERSION ?= v4.25.0
 LOCALRULES ?= $(shell pwd)/tmp/rules
 CORERULESET_DIR ?= $(shell pwd)/tmp/coreruleset
 TMP_DOWNLOAD_DIR ?= $(shell pwd)/tmp/download
@@ -258,6 +258,59 @@ CONFORMANCE_EXTRA_FLAGS ?=
 coreruleset.verify-parity:
 	@$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule" coraza.generaterules
 	sha256sum -c tools/corerulesetgen/testdata/coreruleset_parity.sha256
+
+# Updates the checksum after CRS version bump or generator changes
+.PHONY: coreruleset.update-checksum
+coreruleset.update-checksum: ## Update parity checksum after generator changes
+	@echo "Regenerating rules with --include-test-rule..."
+	@$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule" coraza.generaterules
+	@echo "Updating checksum..."
+	sha256sum tmp/rules/rules.yaml > tools/corerulesetgen/testdata/coreruleset_parity.sha256
+	@echo "Checksum updated in tools/corerulesetgen/testdata/coreruleset_parity.sha256"
+
+# Updates CoreRuleSet version across the entire codebase
+# Usage: make coreruleset.update-version NEW_CRS_VERSION=v4.26.0
+.PHONY: coreruleset.update-version
+coreruleset.update-version: ## Update CRS version everywhere (requires NEW_CRS_VERSION=vX.Y.Z)
+	@if [ -z "$(NEW_CRS_VERSION)" ]; then \
+		echo "Error: NEW_CRS_VERSION is required"; \
+		echo "Usage: make coreruleset.update-version NEW_CRS_VERSION=v4.26.0"; \
+		exit 1; \
+	fi
+	@echo "Updating CoreRuleSet version to $(NEW_CRS_VERSION)..."
+	@OLD_VERSION=$$(grep "^CORERULESET_VERSION" Makefile | awk '{print $$3}'); \
+	OLD_VERSION_NO_V=$${OLD_VERSION#v}; \
+	NEW_VERSION_NO_V=$$(echo "$(NEW_CRS_VERSION)" | sed 's/^v//'); \
+	echo "Replacing $$OLD_VERSION with $(NEW_CRS_VERSION) and $$OLD_VERSION_NO_V with $$NEW_VERSION_NO_V..."; \
+	\
+	sed -i "s/^CORERULESET_VERSION ?= .*/CORERULESET_VERSION ?= $(NEW_CRS_VERSION)/" Makefile; \
+	\
+	sed -i "s/$$OLD_VERSION/$(NEW_CRS_VERSION)/g" DEVELOPMENT.md; \
+	sed -i "s/$$OLD_VERSION_NO_V/$$NEW_VERSION_NO_V/g" DEVELOPMENT.md; \
+	\
+	sed -i "s/$$OLD_VERSION/$(NEW_CRS_VERSION)/g" LIMITATIONS.md; \
+	sed -i "s/$$OLD_VERSION_NO_V/$$NEW_VERSION_NO_V/g" LIMITATIONS.md; \
+	\
+	sed -i "s/$$OLD_VERSION_NO_V/$$NEW_VERSION_NO_V/g" cmd/kubectl-coraza/README.md; \
+	\
+	sed -i "s/Coupled to CoreRuleSet .* (source:/Coupled to CoreRuleSet $(NEW_CRS_VERSION) (source:/" internal/rulesets/unsupported.go; \
+	\
+	echo "Version references updated in:"; \
+	echo "  - Makefile"; \
+	echo "  - DEVELOPMENT.md"; \
+	echo "  - LIMITATIONS.md"; \
+	echo "  - cmd/kubectl-coraza/README.md"; \
+	echo "  - internal/rulesets/unsupported.go"; \
+	echo ""; \
+	echo "Now regenerating rules and updating checksum..."; \
+	$(MAKE) coreruleset.update-checksum; \
+	echo ""; \
+	echo "✓ CoreRuleSet version update complete!"; \
+	echo ""; \
+	echo "Next steps:"; \
+	echo "  1. Review changes: git diff"; \
+	echo "  2. Run tests: make test.conformance"; \
+	echo "  3. Update test/conformance/ftw.yml if new failures appear"
 
 .PHONY: test.conformance
 test.conformance: coreruleset.verify-parity
