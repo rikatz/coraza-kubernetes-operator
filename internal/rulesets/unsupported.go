@@ -33,7 +33,7 @@ import (
 var ruleIDPattern = regexp.MustCompile(`\bid:['"]?(\d+)['"]?`)
 
 // unsupportedRules is the registry of all known unsupported rule IDs.
-// Coupled to CoreRuleSet v4.24.1 (source: LIMITATIONS.md, test/conformance/ftw.yml).
+// Coupled to CoreRuleSet v4.25.0 (source: LIMITATIONS.md, test/conformance/ftw.yml).
 var unsupportedRules = buildRegistry()
 
 // -----------------------------------------------------------------------------

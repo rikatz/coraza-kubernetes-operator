@@ -248,6 +248,21 @@ testoverride:
     '932300-10': 'CORAZA BUG: Failing only with multiphase evaluation'
     '933120-2': 'CORAZA BUG: Failing only with multiphase evaluation'
 
+    # Variable Name Casing Issues (2 tests)
+    '920540-4': 'CORAZA/WASM BUG: Variable name casing - outputs lowercase instead of uppercase'
+    '931130-24': 'CORAZA/WASM BUG: Variable name casing - outputs lowercase instead of uppercase'
+
+    # Skip Mechanism Not Working (1 test)
+    '920540-5': 'CORAZA/WASM BUG: Skip mechanism not working with JSON body processor'
+
+    # Collection Exclusion Syntax Not Supported (1 test)
+    '932390-9': 'CORAZA/WASM BUG: !REQUEST_HEADERS:Cookie exclusion syntax not supported'
+
+    # Binary Encoding Handling Issues (3 tests)
+    '941310-1': 'CORAZA/WASM BUG: Binary encoding with charset mismatch not handled'
+    '941310-3': 'CORAZA/WASM BUG: Binary encoding with charset mismatch not handled'
+    '941310-12': 'CORAZA/WASM BUG: Binary encoding with charset mismatch not handled'
+
     # ---------------------------------------------------------------------------
     # CATEGORY 4: UNDER INVESTIGATION - Edge cases and behavioral differences
     # These tests may be fixable or may be acceptable differences
@@ -291,7 +306,7 @@ testoverride:
     '980170-3': 'INVESTIGATE: retry_once mechanism not working in environment'
 
     # =============================================================================
-    # Summary of Ignored Tests by Category (Total: 190 tests):
+    # Summary of Ignored Tests by Category (Total: 197 tests):
     #
     # CATEGORY 1: ENHANCED SECURITY (45 tests)
     #   - Envoy provides better protection than expected
@@ -308,12 +323,16 @@ testoverride:
     #   - Multipart charset detection: 30 tests
     #   - PL4 false positives: 4 tests
     #
-    # CATEGORY 3: CORAZA/WASM ISSUES (13 tests)
+    # CATEGORY 3: CORAZA/WASM ISSUES (20 tests)
     #   - Bugs that need fixing in Coraza or coraza-proxy-wasm
     #   - GET/HEAD with body: 2 tests
     #   - Protocol version: 4 tests
     #   - Enclosed alphanumerics: 5 tests
     #   - Multiphase evaluation: 2 tests
+    #   - Variable name casing: 2 tests
+    #   - Skip mechanism: 1 test
+    #   - Collection exclusion syntax: 1 test
+    #   - Binary encoding: 3 tests
     #
     # CATEGORY 4: UNDER INVESTIGATION (19 tests)
     #   - Edge cases, behavioral differences, needs investigation
@@ -326,5 +345,5 @@ testoverride:
     #   - PL4 false positives: 2 tests
     #   - retry_once: 5 tests
     #
-    # Test Pass Rate: ~94% (190 ignored out of ~3,300 total tests)
+    # Test Pass Rate: ~94% (197 ignored out of ~3,300 total tests)
     # =============================================================================

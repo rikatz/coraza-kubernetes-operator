@@ -96,7 +96,7 @@ This will:
 
 **Environment Variables:**
 
-- `CORERULESET_VERSION` - CoreRuleSet version to test (default: `v4.24.1`)
+- `CORERULESET_VERSION` - CoreRuleSet version to test (default: `v4.25.0`)
 - `CONFORMANCE_EXTRA_FLAGS` - Additional flags passed to the test (e.g., `OUTPUT_FORMAT=github`)
 - `INCLUDE_TESTS` - Regex pattern to filter which tests to run (e.g., `"920100.*"` to run only rule 920100 tests)
 - `IGNORE_TEST_MANIFEST_ERRORS` - Boolean to ignore FTW test parsing errors (default: `false`)
@@ -196,7 +196,7 @@ make coraza.coreruleset.download
 This downloads and extracts the CoreRuleSet to `tmp/coreruleset/`.
 
 Environment variables:
-- `CORERULESET_VERSION` - Version to download (default: `v4.24.1`)
+- `CORERULESET_VERSION` - Version to download (default: `v4.25.0`)
 
 ## Generating ConfigMaps
 
@@ -225,7 +225,7 @@ Install the plugin for ad hoc use: build `bin/kubectl-coraza` (`make build`) and
 **Generator flags** (also available as `kubectl coraza generate coreruleset …`):
 
 - `--rules-dir` - Rules directory (required)
-- `--version` - CoreRuleSet version (required); accepts `4.24.1` and `v4.24.1`
+- `--version` - CoreRuleSet version (required); accepts `4.25.0` and `v4.25.0`
 - `--ignore-rules` - Comma-separated rule IDs to exclude (e.g. `949110,949111,980130`)
 - `--ignore-pmFromFile` - Strip rules containing `@pmFromFile` (not supported by Coraza WASM paths)
 - `--include-test-rule` - Append the X-CRS-Test block to the bundled `base-rules` ConfigMap
@@ -251,7 +251,7 @@ make CORERULESET_EXTRA_FLAGS="--include-test-rule" coraza.generaterules
 make CORERULESET_EXTRA_FLAGS="--include-test-rule --ignore-pmFromFile" coraza.generaterules
 
 # Direct invocation (stdout only)
-go run ./cmd/kubectl-coraza generate coreruleset --rules-dir /path/to/coreruleset/rules --version 4.24.1
+go run ./cmd/kubectl-coraza generate coreruleset --rules-dir /path/to/coreruleset/rules --version 4.25.0
 ```
 
 ## Deploying CoreRuleSet for Testing
@@ -511,7 +511,7 @@ make helm.sync
 | `KIND_CLUSTER_NAME` | KIND cluster name for tests | `coraza-kubernetes-operator-integration` |
 | `ISTIO_VERSION` | Istio version for deployment | `1.28.2` |
 | `METALLB_VERSION` | MetalLB version for KIND | `0.15.3` |
-| `CORERULESET_VERSION` | CoreRuleSet version | `v4.24.1` |
+| `CORERULESET_VERSION` | CoreRuleSet version | `v4.25.0` |
 | `CORAZA_WASM_IMAGE` | WASM plugin image for tests | (See `test/framework/resources.go`) |
 | `NAMESPACE` | Target namespace for deployments | `default` |
 
