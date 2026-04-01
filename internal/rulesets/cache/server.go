@@ -22,12 +22,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
+	authclient "k8s.io/client-go/kubernetes/typed/authentication/v1"
 )
 
 // -----------------------------------------------------------------------------
@@ -83,13 +83,15 @@ type LatestResponse struct {
 // ruleSetCacheServer provides HTTP endpoints for accessing cached rulesets
 type ruleSetCacheServer struct {
 	cache  *RuleSetCache
+	auth   *TokenAuthenticator
 	srv    *http.Server
 	logger logr.Logger
 	gc     GarbageCollectionConfig
 }
 
 // NewServer creates a new RuleSetCacheServer instance.
-func NewServer(cache *RuleSetCache, addr string, logger logr.Logger, gc *GarbageCollectionConfig) *ruleSetCacheServer {
+// The tokenReview client is used to validate ServiceAccount JWT tokens on incoming requests.
+func NewServer(cache *RuleSetCache, addr string, logger logr.Logger, gc *GarbageCollectionConfig, tokenReview authclient.TokenReviewInterface) *ruleSetCacheServer {
 	gcConfig := DefaultGC()
 	if gc != nil {
 		gcConfig = *gc
@@ -97,6 +99,7 @@ func NewServer(cache *RuleSetCache, addr string, logger logr.Logger, gc *Garbage
 
 	s := &ruleSetCacheServer{
 		cache:  cache,
+		auth:   NewTokenAuthenticator(tokenReview),
 		logger: logger,
 		gc:     gcConfig,
 	}
@@ -119,17 +122,10 @@ func NewServer(cache *RuleSetCache, addr string, logger logr.Logger, gc *Garbage
 
 // Start the cache server.
 func (s *ruleSetCacheServer) Start(ctx context.Context) error {
-	ln, err := net.Listen("tcp", s.srv.Addr)
-	if err != nil {
-		return fmt.Errorf("cache server listen: %w", err)
-	}
-
-	go s.rungc(ctx)
-
 	errChan := make(chan error, 1)
 	go func() {
 		s.logger.Info("Starting ruleset cache server", "addr", s.srv.Addr)
-		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := s.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errChan <- err
 		}
 	}()
@@ -176,12 +172,66 @@ func (s *ruleSetCacheServer) handleRules(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if cacheKey, ok := strings.CutSuffix(path, "/latest"); ok {
+	// Determine the cache key (strip /latest suffix if present).
+	cacheKey := path
+	isLatest := false
+	if stripped, ok := strings.CutSuffix(path, "/latest"); ok {
+		cacheKey = stripped
+		isLatest = true
+	}
+
+	// Authenticate: the token audience must match the requested RuleSet, and
+	// the SA namespace must match the cache key namespace.
+	if err := s.authenticateRequest(r, cacheKey); err != nil {
+		s.logger.Info("Authentication failed", "cacheKey", cacheKey, "error", err)
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	if isLatest {
 		s.handleLatest(w, r, cacheKey)
 		return
 	}
 
-	s.handleGetRules(w, r, path)
+	s.handleGetRules(w, r, cacheKey)
+}
+
+// authenticateRequest validates the Bearer token from the request and checks
+// that the ServiceAccount namespace matches the cache key namespace.
+// The audience-scoped TokenReview ensures the token is authorized for the
+// specific RuleSet being accessed (audience = "coraza-cache:namespace/rulesetName").
+func (s *ruleSetCacheServer) authenticateRequest(r *http.Request, cacheKey string) error {
+	token := extractBearerToken(r)
+	if token == "" {
+		return fmt.Errorf("missing bearer token")
+	}
+
+	audience := Audience(cacheKey)
+	result, err := s.auth.Authenticate(r.Context(), token, audience)
+	if err != nil {
+		return err
+	}
+
+	// Extract the namespace from the cache key and verify the SA lives in it.
+	keyNS, _, ok := strings.Cut(cacheKey, "/")
+	if !ok {
+		return fmt.Errorf("invalid cache key format: %s", cacheKey)
+	}
+	if result.Namespace != keyNS {
+		return fmt.Errorf("service account namespace %s does not match cache key namespace %s", result.Namespace, keyNS)
+	}
+
+	return nil
+}
+
+// extractBearerToken extracts the token from the Authorization header.
+func extractBearerToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if len(auth) > len(prefix) && strings.EqualFold(auth[:len(prefix)], prefix) {
+		return auth[len(prefix):]
+	}
+	return ""
 }
 
 func (s *ruleSetCacheServer) handleLatest(w http.ResponseWriter, _ *http.Request, cacheKey string) {

@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -43,10 +44,11 @@ import (
 // -----------------------------------------------------------------------------
 
 var (
-	testEnv   *envtest.Environment
-	cfg       *rest.Config
-	k8sClient client.Client
-	scheme    *runtime.Scheme
+	testEnv        *envtest.Environment
+	cfg            *rest.Config
+	k8sClient      client.Client
+	testKubeClient kubernetes.Interface
+	scheme         *runtime.Scheme
 )
 
 // -----------------------------------------------------------------------------
@@ -116,6 +118,13 @@ func TestMain(m *testing.M) {
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create client: %v\n", err)
+		_ = testEnv.Stop()
+		os.Exit(1)
+	}
+
+	testKubeClient, err = kubernetes.NewForConfig(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create kubernetes clientset: %v\n", err)
 		_ = testEnv.Stop()
 		os.Exit(1)
 	}

@@ -20,6 +20,7 @@ package controller
 import (
 	"fmt"
 
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
@@ -51,7 +52,7 @@ const DefaultRuleSetCacheServerPort = 18080
 // -----------------------------------------------------------------------------
 
 // SetupControllers initializes all controllers
-func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision, defaultWasmImage, operatorNamespace string) error {
+func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision string, defaultWasmImage, operatorNamespace string, kubeClient kubernetes.Interface) error {
 	if err := (&RuleSetReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -65,6 +66,7 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyC
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),
 		Recorder:                  mgr.GetEventRecorder("engine-controller"),
+		kubeClient:                kubeClient,
 		ruleSetCacheServerCluster: envoyClusterName,
 		istioRevision:             istioRevision,
 		defaultWasmImage:          defaultWasmImage,

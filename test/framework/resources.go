@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -352,6 +353,26 @@ func (s *Scenario) CreateConfigMap(namespace, name, rules string) {
 			s.T.Logf("cleanup: failed to delete ConfigMap %s/%s: %v", namespace, name, err)
 		}
 	})
+}
+
+// CreateCacheServerToken creates a ServiceAccount token via TokenRequest for the cache server client and returns the token string.
+func (s *Scenario) CreateCacheServerToken(namespace, name, audience string) string {
+	s.T.Helper()
+	ctx := s.T.Context()
+
+	tokenReq := &authv1.TokenRequest{
+		Spec: authv1.TokenRequestSpec{
+			Audiences: []string{audience},
+		},
+	}
+	result, err := s.F.KubeClient.CoreV1().ServiceAccounts(namespace).CreateToken(
+		ctx, name, tokenReq, metav1.CreateOptions{},
+	)
+	require.NoError(s.T, err, "create token for SA %s/%s", namespace, name)
+
+	s.T.Logf("Created token for ServiceAccount: %s/%s", namespace, name)
+	return result.Status.Token
+
 }
 
 // CreateGateway creates a Gateway resource and registers cleanup.

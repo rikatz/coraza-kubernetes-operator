@@ -19,6 +19,7 @@ package cache
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +43,7 @@ var (
 func TestNewServer(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
-	server := NewServer(cache, testServerAddr, logger, nil)
+	server := NewServer(cache, testServerAddr, logger, nil, newNoopTokenReview())
 	require.NotNil(t, server)
 	assert.Equal(t, testServerAddr, server.srv.Addr)
 	assert.Equal(t, MaxHeaderSize, server.srv.MaxHeaderBytes)
@@ -52,7 +53,7 @@ func TestNewServer(t *testing.T) {
 func TestServer_StartAndStop(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
-	server := NewServer(cache, testServerAddr, logger, nil)
+	server := NewServer(cache, testServerAddr, logger, nil, newNoopTokenReview())
 
 	t.Log("Starting server in background goroutine")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -69,7 +70,7 @@ func TestServer_StartAndStop(t *testing.T) {
 	t.Log("Waiting for server to shut down")
 	select {
 	case err := <-errChan:
-		if err != nil && err != http.ErrServerClosed && err.Error() != "context canceled" {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, context.Canceled) {
 			t.Errorf("Unexpected error from server: %v", err)
 		}
 	case <-time.After(2 * time.Second):
@@ -77,18 +78,37 @@ func TestServer_StartAndStop(t *testing.T) {
 	}
 }
 
+// testTokenReview returns a fakeTokenReview that authenticates "test-token" as
+// system:serviceaccount:default:coraza-engine-test-engine. Used by handler tests.
+func testTokenReview() *fakeTokenReview {
+	return newFakeTokenReview(map[string]fakeTokenResult{
+		"test-token": {
+			authenticated: true,
+			username:      "system:serviceaccount:default:coraza-engine-test-engine",
+			audiences:     []string{Audience("default/test-instance")},
+		},
+	})
+}
+
+// authenticatedRequest creates an HTTP request with a valid test Bearer token.
+func authenticatedRequest(path string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	return req
+}
+
 func TestServer_HandleGetRules_Success(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
-	server := NewServer(cache, testServerAddr, logger, nil)
+	server := NewServer(cache, testServerAddr, logger, nil, testTokenReview())
 
 	t.Log("Adding test ruleset to cache")
 	testRules := "SecRule REQUEST_URI \"@contains /admin\" \"id:1,deny\""
 
-	cache.Put("test-instance", testRules, dataFile)
+	cache.Put("default/test-instance", testRules, dataFile)
 
 	t.Log("Requesting ruleset from server")
-	req := httptest.NewRequest(http.MethodGet, "/rules/test-instance", nil)
+	req := authenticatedRequest("/rules/default/test-instance")
 	w := httptest.NewRecorder()
 	server.handleRules(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -107,9 +127,10 @@ func TestServer_HandleGetRules_Success(t *testing.T) {
 
 	t.Log("do with null datafile")
 	w = httptest.NewRecorder()
-	cache.Put("test-instance", testRules, nil)
+	cache.Put("default/test-instance", testRules, nil)
 
 	t.Log("Requesting ruleset from server")
+	req = authenticatedRequest("/rules/default/test-instance")
 	server.handleRules(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
@@ -129,13 +150,13 @@ func TestServer_HandleGetRules_Success(t *testing.T) {
 func TestServer_HandleLatest_Success(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
-	server := NewServer(cache, testServerAddr, logger, nil)
+	server := NewServer(cache, testServerAddr, logger, nil, testTokenReview())
 
 	t.Log("Adding test ruleset to cache")
-	cache.Put("test-instance", "test rules", dataFile)
+	cache.Put("default/test-instance", "test rules", dataFile)
 
 	t.Log("Requesting latest from server")
-	req := httptest.NewRequest(http.MethodGet, "/rules/test-instance/latest", nil)
+	req := authenticatedRequest("/rules/default/test-instance/latest")
 	w := httptest.NewRecorder()
 	server.handleRules(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -156,13 +177,13 @@ func TestServer_HandleLatest_Success(t *testing.T) {
 func TestServer_HandleRules_UUIDConsistency(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
-	server := NewServer(cache, testServerAddr, logger, nil)
+	server := NewServer(cache, testServerAddr, logger, nil, testTokenReview())
 
 	t.Log("Adding test ruleset to cache")
-	cache.Put("test-instance", "test rules", nil)
+	cache.Put("default/test-instance", "test rules", nil)
 
 	t.Log("Requesting latest and rules endpoints")
-	req1 := httptest.NewRequest(http.MethodGet, "/rules/test-instance/latest", nil)
+	req1 := authenticatedRequest("/rules/default/test-instance/latest")
 	w1 := httptest.NewRecorder()
 	server.handleRules(w1, req1)
 
@@ -171,7 +192,7 @@ func TestServer_HandleRules_UUIDConsistency(t *testing.T) {
 	require.NoError(t, json.NewDecoder(w1.Body).Decode(&latestResp))
 
 	t.Log("Requesting rules endpoint")
-	req2 := httptest.NewRequest(http.MethodGet, "/rules/test-instance", nil)
+	req2 := authenticatedRequest("/rules/default/test-instance")
 	w2 := httptest.NewRecorder()
 	server.handleRules(w2, req2)
 
@@ -194,7 +215,7 @@ func TestServer_GCByAge(t *testing.T) {
 		MaxAge:     100 * time.Millisecond,
 		MaxSize:    1024 * 1024 * 1024, // 1GB - disable size-based pruning
 	}
-	server := NewServer(cache, testServerAddr, logger, gc)
+	server := NewServer(cache, testServerAddr, logger, gc, newNoopTokenReview())
 
 	modifiedData := make(map[string][]byte)
 	maps.Copy(modifiedData, testDataFile)
@@ -257,7 +278,7 @@ func TestServer_GCBySize(t *testing.T) {
 		MaxAge:     24 * time.Hour, // disable age-based pruning
 		MaxSize:    50,
 	}
-	server := NewServer(cache, ":0", logger, gc)
+	server := NewServer(cache, ":0", logger, gc, newNoopTokenReview())
 
 	t.Log("Adding multiple versions for some instances to create prunable entries")
 	cache.Put("instance1", "instance1 old - 27 chars...", nil)
@@ -318,7 +339,7 @@ func TestServer_GCEmptyCache(t *testing.T) {
 		MaxAge:     100 * time.Millisecond,
 		MaxSize:    100,
 	}
-	server := NewServer(cache, ":0", logger, gc)
+	server := NewServer(cache, ":0", logger, gc, newNoopTokenReview())
 
 	t.Log("Starting GC on empty cache")
 	ctx := t.Context()
@@ -334,8 +355,8 @@ func TestServer_GCEmptyCache(t *testing.T) {
 func TestServer_HandleGetRules_NotFound(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
-	server := NewServer(cache, testServerAddr, logger, nil)
-	req := httptest.NewRequest(http.MethodGet, "/rules/non-existent", nil)
+	server := NewServer(cache, testServerAddr, logger, nil, testTokenReview())
+	req := authenticatedRequest("/rules/default/test-instance")
 	w := httptest.NewRecorder()
 	server.handleRules(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
@@ -344,7 +365,7 @@ func TestServer_HandleGetRules_NotFound(t *testing.T) {
 func TestServer_HandleGetRules_MissingInstance(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
-	server := NewServer(cache, testServerAddr, logger, nil)
+	server := NewServer(cache, testServerAddr, logger, nil, newNoopTokenReview())
 	req := httptest.NewRequest(http.MethodGet, "/rules/", nil)
 	w := httptest.NewRecorder()
 	server.handleRules(w, req)
@@ -354,8 +375,8 @@ func TestServer_HandleGetRules_MissingInstance(t *testing.T) {
 func TestServer_HandleLatest_NotFound(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
-	server := NewServer(cache, testServerAddr, logger, nil)
-	req := httptest.NewRequest(http.MethodGet, "/rules/non-existent/latest", nil)
+	server := NewServer(cache, testServerAddr, logger, nil, testTokenReview())
+	req := authenticatedRequest("/rules/default/test-instance/latest")
 	w := httptest.NewRecorder()
 	server.handleRules(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
@@ -364,7 +385,7 @@ func TestServer_HandleLatest_NotFound(t *testing.T) {
 func TestServer_HandleRules_MethodNotAllowed(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
-	server := NewServer(cache, testServerAddr, logger, nil)
+	server := NewServer(cache, testServerAddr, logger, nil, newNoopTokenReview())
 	methods := []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch}
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {

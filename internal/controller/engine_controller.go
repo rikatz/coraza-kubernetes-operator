@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -65,12 +67,20 @@ type EngineReconciler struct {
 	Recorder events.EventRecorder
 
 	client.Client
+	kubeClient                kubernetes.Interface
 	ruleSetCacheServerCluster string
 	istioRevision             string
 	// defaultWasmImage is the OCI URL used for Istio WasmPlugin spec.url when the
 	// Engine omits spec.driver.istio.wasm.image.
 	defaultWasmImage  string
 	operatorNamespace string
+
+	// tokenStore is a thread-safe store for cache client tokens, keyed by
+	// "namespace/engineName/rulesetName". Uses sync.Map for simple concurrent access.
+	// Each Engine+RuleSet pair has its own token (no sharing), so no per-key mutex is needed.
+	// Including the rulesetName in the key ensures that changing an Engine's
+	// spec.ruleSet.name invalidates the cached token (which encodes the audience).
+	tokenStore sync.Map
 }
 
 // SetupWithManager sets up the controller with the Manager.

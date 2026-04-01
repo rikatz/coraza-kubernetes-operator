@@ -23,6 +23,23 @@ rules:
   - watch
 - apiGroups:
   - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
+- apiGroups:
+  - ""
   - events.k8s.io
   resources:
   - events

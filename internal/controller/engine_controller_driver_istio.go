@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -81,7 +82,32 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 		return ctrl.Result{}, err
 	}
 
-	wasmPlugin, err := r.applyWasmPlugin(ctx, log, req, &engine)
+	logDebug(log, req, "Engine", "Ensuring cache client ServiceAccount")
+	saName, err := r.ensureCacheClientServiceAccount(ctx, log, req, &engine)
+	if err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "ServiceAccountFailed", fmt.Sprintf("Failed to ensure cache client ServiceAccount: %v", err)); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+
+	logDebug(log, req, "Engine", "Ensuring cache client token")
+	cacheToken, renewAt, err := r.ensureCacheToken(ctx, log, req, saName, engine.Spec.RuleSet.Name)
+	if err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "TokenFailed", fmt.Sprintf("Failed to ensure cache client token: %v", err)); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+	if cacheToken == "" {
+		err := fmt.Errorf("cache client token is empty for RuleSet %s", engine.Spec.RuleSet.Name)
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "TokenFailed", err.Error()); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+
+	wasmPlugin, err := r.applyWasmPlugin(ctx, log, req, &engine, cacheToken)
 	if err != nil {
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "ProvisioningFailed", fmt.Sprintf("Failed to create or update WasmPlugin: %v", err)); patchErr != nil {
 			return ctrl.Result{}, patchErr
@@ -111,12 +137,17 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 	logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)
 	r.Recorder.Eventf(&engine, nil, "Normal", "WasmPluginCreated", "Provision", "Created WasmPlugin %s/%s", wasmPlugin.GetNamespace(), wasmPlugin.GetName())
 
-	return ctrl.Result{}, nil
+	// Schedule re-reconciliation at the token's renewal deadline. This is a
+	// single requeue that fires exactly when the token needs refreshing,
+	// avoiding repeated intermediate reconciliations.
+	requeueAfter := max(time.Until(renewAt), time.Second)
+	logDebug(log, req, "Engine", "Scheduling token renewal", "requeueAfter", requeueAfter)
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // applyWasmPlugin builds the WasmPlugin resource, sets the controller reference,
 // and applies it via server-side apply.
-func (r *EngineReconciler) applyWasmPlugin(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (*unstructured.Unstructured, error) {
+func (r *EngineReconciler) applyWasmPlugin(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine, cacheToken string) (*unstructured.Unstructured, error) {
 	logDebug(log, req, "Engine", "Building WasmPlugin resource")
 	wasmURL, fromSpec := r.wasmPluginOCIURLSource(engine)
 	if fromSpec {
@@ -124,7 +155,7 @@ func (r *EngineReconciler) applyWasmPlugin(ctx context.Context, log logr.Logger,
 	} else {
 		logDebug(log, req, "Engine", "WasmPlugin OCI URL from operator default", "url", wasmURL)
 	}
-	wasmPlugin := r.buildWasmPlugin(engine, wasmURL)
+	wasmPlugin := r.buildWasmPlugin(engine, wasmURL, cacheToken)
 
 	logDebug(log, req, "Engine", "Setting controller reference on WasmPlugin")
 	if err := controllerutil.SetControllerReference(engine, wasmPlugin, r.Scheme); err != nil {
@@ -157,7 +188,7 @@ func (r *EngineReconciler) wasmPluginOCIURLSource(engine *wafv1alpha1.Engine) (u
 	return r.defaultWasmImage, false
 }
 
-func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL string) *unstructured.Unstructured {
+func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL string, cacheToken string) *unstructured.Unstructured {
 	rulesetKey := fmt.Sprintf("%s/%s", engine.Namespace, engine.Spec.RuleSet.Name)
 
 	failurePolicy := wafv1alpha1.FailurePolicyFail
@@ -169,6 +200,7 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		"cache_server_instance": rulesetKey,
 		"cache_server_cluster":  r.ruleSetCacheServerCluster,
 		"failure_policy":        string(failurePolicy),
+		"cache_token":           cacheToken,
 	}
 
 	if engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer != nil {
