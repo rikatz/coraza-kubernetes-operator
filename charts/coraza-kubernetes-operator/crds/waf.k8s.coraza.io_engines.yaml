@@ -74,6 +74,14 @@ spec:
                             minLength: 1
                             pattern: ^oci://
                             type: string
+                          imagePullSecret:
+                            description: |-
+                              imagePullSecret is the name of a Kubernetes Secret in the same namespace
+                              as the Engine that contains Docker registry credentials for pulling the
+                              WASM OCI image. This is passed directly to the Istio WasmPlugin resource.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
                           mode:
                             default: gateway
                             description: |-
