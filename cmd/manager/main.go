@@ -29,10 +29,13 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -76,6 +79,8 @@ func main() {
 
 	tlsOpts := buildTLSOpts(cfg.enableHTTP2)
 
+	podNamespace := os.Getenv("POD_NAMESPACE")
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                buildMetricsServerOptions(cfg, tlsOpts),
@@ -83,6 +88,7 @@ func main() {
 		HealthProbeBindAddress: cfg.probeAddr,
 		LeaderElection:         cfg.enableLeaderElect,
 		LeaderElectionID:       "waf.k8s.coraza.io",
+		Cache:                  buildCacheOptions(podNamespace),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -90,9 +96,9 @@ func main() {
 	}
 
 	rulesetCache := setupCacheServer(mgr, cfg)
-	setupIstioPrerequisites(mgr, cfg, os.Getenv("POD_NAMESPACE"))
+	setupIstioPrerequisites(mgr, cfg, podNamespace)
 
-	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage); err != nil {
+	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}
@@ -242,6 +248,25 @@ func setupWebhookServer(cfg config, tlsOpts []func(*tls.Config)) webhook.Server 
 	}
 
 	return webhook.NewServer(opts)
+}
+
+// buildCacheOptions returns cache options that scope the NetworkPolicy informer
+// to the operator namespace. Without this, the controller would require
+// cluster-wide list/watch on NetworkPolicies.
+func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
+	opts := ctrlcache.Options{
+		DefaultTransform: ctrlcache.TransformStripManagedFields(),
+	}
+	if operatorNamespace != "" {
+		opts.ByObject = map[client.Object]ctrlcache.ByObject{
+			&networkingv1.NetworkPolicy{}: {
+				Namespaces: map[string]ctrlcache.Config{
+					operatorNamespace: {},
+				},
+			},
+		}
+	}
+	return opts
 }
 
 func setupCacheServer(mgr ctrl.Manager, cfg config) *cache.RuleSetCache {

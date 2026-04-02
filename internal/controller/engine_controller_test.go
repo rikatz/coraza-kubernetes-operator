@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	networkingv1 "k8s.io/api/networking/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -735,4 +736,101 @@ func TestEngineReconciler_BuildWasmPlugin_WasmImageResolution(t *testing.T) {
 		require.True(t, found)
 		assert.Equal(t, custom, url)
 	})
+}
+
+func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating RuleSet for NetworkPolicy test")
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "netpol-test-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	t.Log("Creating test engine with gateway workload selector")
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "netpol-test-engine",
+		Namespace:   testNamespace,
+		RuleSetName: ruleset.Name,
+		WorkloadLabels: map[string]string{
+			"gateway.networking.k8s.io/gateway-name": "test-gw",
+		},
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
+
+	t.Log("Reconciling engine with operator namespace set")
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+		operatorNamespace:         testNamespace,
+	}
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, result.Requeue)
+
+	t.Log("Verifying NetworkPolicy was created")
+	var np networkingv1.NetworkPolicy
+	err = k8sClient.Get(ctx, types.NamespacedName{
+		Name:      networkPolicyName(engine),
+		Namespace: testNamespace,
+	}, &np)
+	require.NoError(t, err, "NetworkPolicy should exist after Engine reconciliation")
+
+	t.Log("Verifying NetworkPolicy labels")
+	assert.Equal(t, engine.Name, np.Labels["waf.k8s.coraza.io/engine-name"])
+	assert.Equal(t, engine.Namespace, np.Labels["waf.k8s.coraza.io/engine-namespace"])
+	assert.Equal(t, "coraza-kubernetes-operator", np.Labels["app.kubernetes.io/managed-by"])
+
+	t.Log("Verifying NetworkPolicy targets operator pods")
+	assert.Equal(t, operatorPodLabelValue, np.Spec.PodSelector.MatchLabels[operatorPodLabelKey])
+
+	t.Log("Verifying NetworkPolicy allows ingress only from gateway pods")
+	require.Len(t, np.Spec.PolicyTypes, 1)
+	assert.Equal(t, networkingv1.PolicyTypeIngress, np.Spec.PolicyTypes[0])
+	require.Len(t, np.Spec.Ingress, 1)
+	require.Len(t, np.Spec.Ingress[0].From, 1)
+
+	peer := np.Spec.Ingress[0].From[0]
+	require.NotNil(t, peer.NamespaceSelector)
+	assert.Equal(t, engine.Namespace, peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"])
+	require.NotNil(t, peer.PodSelector)
+	assert.Equal(t, "test-gw", peer.PodSelector.MatchLabels["gateway.networking.k8s.io/gateway-name"])
+
+	t.Log("Verifying NetworkPolicy allows only cache server port")
+	require.Len(t, np.Spec.Ingress[0].Ports, 1)
+	assert.Equal(t, int32(DefaultRuleSetCacheServerPort), np.Spec.Ingress[0].Ports[0].Port.IntVal)
+
+	t.Log("Verifying NetworkPolicy is cleaned up when Engine is deleted")
+	require.NoError(t, k8sClient.Delete(ctx, engine))
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	})
+	require.NoError(t, err)
+
+	err = k8sClient.Get(ctx, types.NamespacedName{
+		Name:      networkPolicyName(engine),
+		Namespace: testNamespace,
+	}, &np)
+	assert.True(t, client.IgnoreNotFound(err) == nil, "NetworkPolicy should be deleted after Engine cleanup")
 }

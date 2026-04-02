@@ -29,6 +29,7 @@ import (
 	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,6 +76,10 @@ func TestMain(m *testing.M) {
 	}
 	if err := appsv1.AddToScheme(scheme); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to add apps scheme: %v\n", err)
+		os.Exit(1)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to add networking scheme: %v\n", err)
 		os.Exit(1)
 	}
 

@@ -64,6 +64,13 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 		return ctrl.Result{}, err
 	}
 
+	if err := r.applyNetworkPolicy(ctx, log, req, &engine); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "NetworkPolicyFailed", fmt.Sprintf("Failed to apply NetworkPolicy: %v", err)); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+
 	logDebug(log, req, "Engine", "Finding matched Gateways")
 	gateways, gwErr := r.matchedGateways(ctx, log, req, &engine)
 	if gwErr != nil {

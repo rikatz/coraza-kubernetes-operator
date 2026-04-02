@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,7 +69,8 @@ type EngineReconciler struct {
 	istioRevision             string
 	// defaultWasmImage is the OCI URL used for Istio WasmPlugin spec.url when the
 	// Engine omits spec.driver.istio.wasm.image.
-	defaultWasmImage string
+	defaultWasmImage  string
+	operatorNamespace string
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -98,6 +100,12 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return hasGWAPI
 			}),
 		)).
+		Watches(&networkingv1.NetworkPolicy{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForNetworkPolicy), builder.WithPredicates(
+			predicate.NewPredicateFuncs(func(object client.Object) bool {
+				_, hasLabel := object.GetLabels()["waf.k8s.coraza.io/engine-name"]
+				return hasLabel
+			}),
+		)).
 		WithOptions(controller.Options{
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](
 				1*time.Second,
@@ -121,6 +129,7 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Get(ctx, req.NamespacedName, &engine); err != nil {
 		if apierrors.IsNotFound(err) {
 			logDebug(log, req, "Engine", "Resource not found")
+			r.cleanupNetworkPolicy(ctx, log, req)
 			return ctrl.Result{Requeue: false}, nil
 		}
 
