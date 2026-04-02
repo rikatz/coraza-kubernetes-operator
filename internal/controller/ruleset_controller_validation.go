@@ -68,10 +68,10 @@ func (r *RuleSetReconciler) rejectUnsupportedRules(
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
 	rules string,
-) (bool, error) {
+) (bool, string, error) {
 	unsupported := rulesets.CheckUnsupportedRules(rules)
 	if len(unsupported) == 0 {
-		return false, nil
+		return false, "", nil
 	}
 
 	msg := rulesets.FormatUnsupportedMessage(unsupported)
@@ -84,8 +84,8 @@ func (r *RuleSetReconciler) rejectUnsupportedRules(
 	}
 
 	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "UnsupportedRules", msg); patchErr != nil {
-		return true, patchErr
+		return true, "", patchErr
 	}
 
-	return true, nil
+	return true, "", nil
 }

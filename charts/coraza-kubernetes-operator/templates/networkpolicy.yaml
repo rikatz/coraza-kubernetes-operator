@@ -14,6 +14,6 @@ spec:
   ingress:
     {{- if .Values.metrics.enabled }}
     - ports:
-        - port: 8082
+        - port: 8443
           protocol: TCP
     {{- end }}

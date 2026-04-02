@@ -77,7 +77,7 @@ func main() {
 	logFlags()
 	validateFlags(cfg)
 
-	tlsOpts := buildTLSOpts(cfg.enableHTTP2)
+	tlsOpts := buildTLSOpts()
 
 	podNamespace := os.Getenv("POD_NAMESPACE")
 
@@ -122,8 +122,6 @@ type config struct {
 	metricsAddr       string
 	probeAddr         string
 	enableLeaderElect bool
-	secureMetrics     bool
-	enableHTTP2       bool
 	metricsCertPath   string
 	metricsCertName   string
 	metricsCertKey    string
@@ -144,18 +142,16 @@ func parseFlags() config {
 	var cfg config
 
 	flag.StringVar(&cfg.metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
-		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
+		"Use :8443 for HTTPS or leave as 0 to disable the metrics service.")
 	flag.StringVar(&cfg.probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&cfg.enableLeaderElect, "leader-elect", false, "Enable leader election for controller manager. "+
 		"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&cfg.secureMetrics, "metrics-secure", true, "If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.StringVar(&cfg.webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
 	flag.StringVar(&cfg.webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
 	flag.StringVar(&cfg.webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
 	flag.StringVar(&cfg.metricsCertPath, "metrics-cert-path", "", "The directory that contains the metrics server certificate.")
 	flag.StringVar(&cfg.metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&cfg.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
-	flag.BoolVar(&cfg.enableHTTP2, "enable-http2", false, "If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.DurationVar(&cfg.cacheGCInterval, "cache-gc-interval", cache.CacheGCInterval, "How often to check for and remove stale cache entries in the RuleSet cache")
 	flag.DurationVar(&cfg.cacheMaxAge, "cache-max-age", cache.CacheMaxAge, "Maximum age of a cache entry before it's considered stale in the RuleSet cache")
 	flag.IntVar(&cfg.cacheMaxSize, "cache-max-size", cache.CacheMaxSize, fmt.Sprintf("Maximum total size of all cached rules in the RuleSet cache in bytes (default %dMB)", cache.CacheMaxSize/(1024*1024)))
@@ -191,32 +187,20 @@ func logFlags() {
 	setupLog.Info("configuration", kvs...)
 }
 
-func buildTLSOpts(enableHTTP2 bool) []func(*tls.Config) {
-	if enableHTTP2 {
-		return nil
-	}
-
-	// Disabling http/2 prevents vulnerability to the HTTP/2 Stream Cancellation and
-	// Rapid Reset CVEs. For more information see:
-	// - https://github.com/advisories/GHSA-qppj-fm5r-hxr3
-	// - https://github.com/advisories/GHSA-4374-p667-p6c8
+func buildTLSOpts() []func(*tls.Config) {
 	return []func(*tls.Config){
 		func(c *tls.Config) {
-			setupLog.Info("disabling http/2")
-			c.NextProtos = []string{"http/1.1"}
+			c.MinVersion = tls.VersionTLS13
 		},
 	}
 }
 
 func buildMetricsServerOptions(cfg config, tlsOpts []func(*tls.Config)) metricsserver.Options {
 	opts := metricsserver.Options{
-		BindAddress:   cfg.metricsAddr,
-		SecureServing: cfg.secureMetrics,
-		TLSOpts:       tlsOpts,
-	}
-
-	if cfg.secureMetrics {
-		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
+		BindAddress:    cfg.metricsAddr,
+		SecureServing:  true,
+		TLSOpts:        tlsOpts,
+		FilterProvider: filters.WithAuthenticationAndAuthorization,
 	}
 
 	if len(cfg.metricsCertPath) > 0 {

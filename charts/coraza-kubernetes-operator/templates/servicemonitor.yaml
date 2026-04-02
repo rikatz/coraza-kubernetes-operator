@@ -14,5 +14,15 @@ spec:
     - port: metrics
       interval: 30s
       scrapeTimeout: 10s
-      scheme: http
+      scheme: https
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        {{- if and .Values.metrics.certSecret .Values.metrics.caName }}
+        ca:
+          secret:
+            name: {{ .Values.metrics.certSecret }}
+            key: {{ .Values.metrics.caName }}
+        {{- else }}
+        insecureSkipVerify: true
+        {{- end }}
 {{- end }}

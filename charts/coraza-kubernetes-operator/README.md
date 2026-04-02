@@ -41,15 +41,66 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 | `resources.requests.memory`                           | string | `128Mi`                                                   | Memory request                                                                                              |
 | `resources.limits.cpu`                                | string | `500m`                                                    | CPU limit                                                                                                   |
 | `resources.limits.memory`                             | string | `256Mi`                                                   | Memory limit                                                                                                |
-| `metrics.enabled`                                     | bool   | `true`                                                    | Enable the controller-runtime metrics endpoint (port 8082)                                                  |
+| `metrics.enabled`                                     | bool   | `true`                                                    | Enable the controller-runtime metrics endpoint (HTTPS on port 8443)                                         |
+| `metrics.certSecret`                                  | string | `""`                                                      | Name of a Secret with TLS cert/key for metrics. When empty, a self-signed certificate is generated          |
+| `metrics.certName`                                    | string | `tls.crt`                                                 | Key name of the certificate file inside `certSecret`                                                        |
+| `metrics.keyName`                                     | string | `tls.key`                                                 | Key name of the private key file inside `certSecret`                                                        |
+| `metrics.caName`                                      | string | `""`                                                      | Key name of a CA certificate inside `certSecret` for ServiceMonitor TLS verification                        |
 | `metrics.serviceMonitor.enabled`                      | bool   | `false`                                                   | Create a ServiceMonitor resource                                                                            |
 | `istio.revision`                                      | string | `""`                                                      | Istio control plane revision label; empty means no revision label on managed resources                      |
 | `defaultWasmImage`                                    | string | `""`                                                      | Default WASM plugin OCI URL when an Engine omits `spec.driver.istio.wasm.image`; empty uses operator built-in default |
 | `createNamespace`                                     | bool   | `true`                                                    | Create the release namespace as a chart-managed resource with PSS labels                                    |
 | `openshift.enabled`                                   | bool   | `false`                                                   | Omit UID/fsGroup from pod security context for OpenShift SCC compatibility                                  |
 | `podSecurityStandard.version`                         | string | `latest`                                                  | Kubernetes version for Pod Security Standard labels (`latest` or `vX.YZ`)                                    |
-| **Kubernetes version**                                | string | `1.33+`                                                   | Minimum cluster version required by this chart (due to resizePolicy API) |
+| **Kubernetes version**                                | string | `1.33+`                                                   | Minimum cluster version required by this chart (due to resizePolicy API)                                    |
 | `nodeSelector`                                        | object | `{}`                                                      | Node selector constraints                                                                                   |
 | `tolerations`                                         | list   | `[]`                                                      | Tolerations                                                                                                 |
 | `affinity`                                            | object | `{}`                                                      | Affinity rules                                                                                              |
 | `topologySpreadConstraints`                           | list   | `[]`                                                      | Topology spread constraints for pod scheduling                                                              |
+
+## Metrics
+
+The metrics endpoint is always served over HTTPS on port **8443** with TLS 1.3 and requires authentication via [controller-runtime authentication/authorization filters](https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/metrics/filters).
+
+### Self-signed certificates (default)
+
+When `metrics.certSecret` is empty, controller-runtime generates a self-signed certificate automatically. No extra configuration is needed.
+
+### User-provided certificates
+
+To use your own TLS certificate, create a Secret containing the certificate and key, then reference it:
+
+```yaml
+metrics:
+  certSecret: my-metrics-tls
+  certName: tls.crt    # key name inside the secret
+  keyName: tls.key      # key name inside the secret
+  caName: ca.crt        # optional: CA for ServiceMonitor TLS verification
+```
+
+### Prometheus RBAC
+
+The metrics endpoint uses Kubernetes authentication. Prometheus must present a valid ServiceAccount token and the ServiceAccount must have permission to access the `/metrics` endpoint. Create a ClusterRole and ClusterRoleBinding:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: coraza-metrics-reader
+rules:
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: coraza-metrics-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: coraza-metrics-reader
+subjects:
+  - kind: ServiceAccount
+    name: prometheus  # adjust to your Prometheus SA
+    namespace: monitoring
+```

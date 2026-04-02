@@ -145,7 +145,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	logDebug(log, req, "RuleSet", "Checking for unsupported rules")
-	foundUnsupportedRules, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules)
+	foundUnsupportedRules, unsupportedMsg, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -154,7 +154,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	logInfo(log, req, "RuleSet", "Caching rules")
-	return r.cacheRules(ctx, log, req, &ruleset, aggregatedRules, secretData)
+	return r.cacheRules(ctx, log, req, &ruleset, aggregatedRules, secretData, unsupportedMsg)
 }
 
 // -----------------------------------------------------------------------------

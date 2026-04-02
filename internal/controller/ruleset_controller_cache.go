@@ -23,6 +23,7 @@ func (r *RuleSetReconciler) cacheRules(
 	ruleset *wafv1alpha1.RuleSet,
 	aggregatedRules string,
 	secretData map[string][]byte,
+	unsupportedMsg string,
 ) (ctrl.Result, error) {
 	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
 	// NOTE: The data stored in the cache (including any RuleData sourced from a Secret)
@@ -32,7 +33,7 @@ func (r *RuleSetReconciler) cacheRules(
 	r.Cache.Put(cacheKey, aggregatedRules, secretData)
 	logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
 
-	statusMsg := fmt.Sprintf("Rules cached as %s/%s", ruleset.Namespace, ruleset.Name)
+	statusMsg := buildCacheReadyMessage(ruleset.Namespace, ruleset.Name, unsupportedMsg)
 	if err := patchReady(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RulesCached", statusMsg); err != nil {
 		return ctrl.Result{}, err
 	}

@@ -285,3 +285,15 @@ func shouldSkipMissingFileError(err error, secretData map[string][]byte) bool {
 	_, exists := secretData[fileName]
 	return exists
 }
+
+// buildCacheReadyMessage constructs the Ready condition message after successful
+// caching. When unsupportedMsg is non-empty (annotation override active), the
+// detected unsupported rules are appended so they remain visible in the status.
+func buildCacheReadyMessage(namespace, name, unsupportedMsg string) string {
+	msg := fmt.Sprintf("Successfully cached rules for %s/%s", namespace, name)
+	if unsupportedMsg != "" {
+		msg += "\n[annotation override] " + unsupportedMsg
+	}
+
+	return msg
+}

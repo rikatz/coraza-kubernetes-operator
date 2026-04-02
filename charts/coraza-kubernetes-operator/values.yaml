@@ -18,8 +18,15 @@ resources:
 
 metrics:
   enabled: true
-  # TODO: Enable secure metrics with auth once ServiceMonitor is configured for authn/authz
-  # https://github.com/networking-incubator/coraza-kubernetes-operator/issues/88
+  # Name of an existing Secret containing TLS certificate and key for the metrics endpoint.
+  # When empty, controller-runtime generates a self-signed certificate automatically.
+  certSecret: ""
+  # Key names inside the certSecret (defaults: tls.crt, tls.key).
+  certName: "tls.crt"
+  keyName: "tls.key"
+  # If the secret also contains a CA certificate, set caName so the ServiceMonitor
+  # can verify the metrics endpoint instead of using insecureSkipVerify.
+  caName: ""
   serviceMonitor:
     enabled: false
 
