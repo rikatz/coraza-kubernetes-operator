@@ -29,6 +29,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 )
 
 const (
@@ -71,7 +73,7 @@ func TestSecureMetrics(t *testing.T) {
 			_ = resp.Body.Close()
 		}()
 		return true
-	}, 30*time.Second, time.Second,
+	}, framework.DefaultTimeout, framework.DefaultInterval,
 		"metrics endpoint not reachable via port-forward at %s", metricsURL,
 	)
 
@@ -110,7 +112,7 @@ func TestSecureMetrics(t *testing.T) {
 			defer func() { _ = resp.Body.Close() }()
 			assert.True(collect, resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden,
 				"expected 401 or 403 for unauthenticated request, got %d", resp.StatusCode)
-		}, 30*time.Second, 2*time.Second)
+		}, framework.DefaultTimeout, framework.DefaultInterval)
 	})
 
 	// -------------------------------------------------------------------------
@@ -149,7 +151,7 @@ func TestSecureMetrics(t *testing.T) {
 				"metrics response should contain Prometheus HELP lines")
 			assert.Contains(collect, bodyStr, "# TYPE",
 				"metrics response should contain Prometheus TYPE lines")
-		}, 30*time.Second, 2*time.Second)
+		}, framework.DefaultTimeout, framework.DefaultInterval)
 	})
 
 	// -------------------------------------------------------------------------
