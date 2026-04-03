@@ -85,13 +85,15 @@ func TestResolveDefaultWasmImage(t *testing.T) {
 // buildTLSOpts Tests
 // -----------------------------------------------------------------------------
 
-func TestBuildTLSOpts_EnforcesTLS13(t *testing.T) {
+func TestBuildTLSOpts_EnforcesTLS13AndDisablesHTTP2(t *testing.T) {
 	opts := buildTLSOpts()
 	require.Len(t, opts, 1)
 
 	tlsCfg := &tls.Config{}
 	opts[0](tlsCfg)
 	assert.Equal(t, uint16(tls.VersionTLS13), tlsCfg.MinVersion)
+	assert.Equal(t, []string{"http/1.1"}, tlsCfg.NextProtos,
+		"HTTP/2 should be disabled to mitigate Rapid Reset (CVE-2023-44487)")
 }
 
 // -----------------------------------------------------------------------------

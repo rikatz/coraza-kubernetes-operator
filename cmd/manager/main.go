@@ -80,6 +80,10 @@ func main() {
 	tlsOpts := buildTLSOpts()
 
 	podNamespace := os.Getenv("POD_NAMESPACE")
+	if podNamespace == "" {
+		setupLog.Error(errors.New("missing required environment variable"), "POD_NAMESPACE must be set (typically via the downward API)")
+		os.Exit(1)
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
@@ -191,6 +195,9 @@ func buildTLSOpts() []func(*tls.Config) {
 	return []func(*tls.Config){
 		func(c *tls.Config) {
 			c.MinVersion = tls.VersionTLS13
+			// Disable HTTP/2 to mitigate HTTP/2 Rapid Reset (CVE-2023-44487)
+			// and related stream-cancellation DoS attacks.
+			c.NextProtos = []string{"http/1.1"}
 		},
 	}
 }
@@ -238,19 +245,16 @@ func setupWebhookServer(cfg config, tlsOpts []func(*tls.Config)) webhook.Server 
 // to the operator namespace. Without this, the controller would require
 // cluster-wide list/watch on NetworkPolicies.
 func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
-	opts := ctrlcache.Options{
+	return ctrlcache.Options{
 		DefaultTransform: ctrlcache.TransformStripManagedFields(),
-	}
-	if operatorNamespace != "" {
-		opts.ByObject = map[client.Object]ctrlcache.ByObject{
+		ByObject: map[client.Object]ctrlcache.ByObject{
 			&networkingv1.NetworkPolicy{}: {
 				Namespaces: map[string]ctrlcache.Config{
 					operatorNamespace: {},
 				},
 			},
-		}
+		},
 	}
-	return opts
 }
 
 func setupCacheServer(mgr ctrl.Manager, cfg config) *cache.RuleSetCache {
@@ -269,8 +273,8 @@ func setupCacheServer(mgr ctrl.Manager, cfg config) *cache.RuleSetCache {
 }
 
 func setupIstioPrerequisites(mgr ctrl.Manager, cfg config, podNamespace string) {
-	if cfg.operatorName == "" || podNamespace == "" {
-		setupLog.Info("Skipping Istio prerequisites: --operator-name and/or POD_NAMESPACE not set")
+	if cfg.operatorName == "" {
+		setupLog.Info("Skipping Istio prerequisites: --operator-name not set")
 		return
 	}
 

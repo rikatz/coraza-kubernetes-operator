@@ -19,7 +19,6 @@ limitations under the License.
 package integration
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -30,11 +29,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
-
-	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 )
 
 const (
@@ -48,76 +42,17 @@ const (
 // metrics when properly authenticated.
 func TestSecureMetrics(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	s := fw.NewScenario(t)
 
 	// -------------------------------------------------------------------------
-	// Step 1: Port-forward to the operator pod metrics port
+	// Port-forward to the operator pod metrics port
 	// -------------------------------------------------------------------------
 
-	localPort := framework.AllocatePort()
+	s.Step("port-forward to operator metrics")
+	proxy := s.ProxyToPod(operatorNamespace, operatorSelector, metricsPort)
+	metricsURL := fmt.Sprintf("https://localhost:%s/metrics", proxy.LocalPort())
 
-	pods, err := fw.KubeClient.CoreV1().Pods(operatorNamespace).List(ctx, metav1.ListOptions{
-		LabelSelector: operatorSelector,
-	})
-	require.NoError(t, err, "list operator pods")
-	require.NotEmpty(t, pods.Items, "no operator pods found with selector %s", operatorSelector)
-
-	podName := pods.Items[0].Name
-	t.Logf("Port-forwarding to operator pod %s/%s port %d -> localhost:%s",
-		operatorNamespace, podName, metricsPort, localPort)
-
-	pfCtx, pfCancel := context.WithCancel(ctx)
-	t.Cleanup(pfCancel)
-
-	pfReady := make(chan struct{})
-	pfErr := make(chan error, 1)
-	go func() {
-		transport, upgrader, err := spdy.RoundTripperFor(fw.RestConfig)
-		if err != nil {
-			pfErr <- fmt.Errorf("create SPDY transport: %w", err)
-			return
-		}
-
-		pfURL := fw.KubeClient.CoreV1().RESTClient().Post().
-			Resource("pods").
-			Namespace(operatorNamespace).
-			Name(podName).
-			SubResource("portforward").
-			URL()
-
-		dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", pfURL)
-
-		stopCh := make(chan struct{})
-		go func() {
-			<-pfCtx.Done()
-			close(stopCh)
-		}()
-
-		pf, err := portforward.New(dialer,
-			[]string{fmt.Sprintf("%s:%d", localPort, metricsPort)},
-			stopCh, pfReady, io.Discard, io.Discard,
-		)
-		if err != nil {
-			pfErr <- fmt.Errorf("create port-forwarder: %w", err)
-			return
-		}
-
-		pfErr <- pf.ForwardPorts()
-	}()
-
-	select {
-	case <-pfReady:
-		t.Log("port-forward ready")
-	case err := <-pfErr:
-		t.Fatalf("port-forward failed to start: %v", err)
-	case <-time.After(30 * time.Second):
-		t.Fatal("timeout waiting for port-forward to become ready")
-	}
-
-	metricsURL := fmt.Sprintf("https://localhost:%s/metrics", localPort)
-
-	// Use a TLS client that skips certificate verification (the operator
-	// uses a self-signed cert by default in test environments).
+	// Wait for the TLS endpoint to accept connections through the port-forward.
 	tlsClient := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
@@ -126,13 +61,26 @@ func TestSecureMetrics(t *testing.T) {
 			},
 		},
 	}
+	require.Eventually(t, func() bool {
+		resp, err := tlsClient.Get(metricsURL)
+		if err != nil {
+			return false
+		}
+		defer func() {
+			_, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+		}()
+		return true
+	}, 30*time.Second, time.Second,
+		"metrics endpoint not reachable via port-forward at %s", metricsURL,
+	)
 
 	// -------------------------------------------------------------------------
-	// Step 2: Verify TLS 1.3 is enforced
+	// Verify TLS 1.3 is enforced
 	// -------------------------------------------------------------------------
 
+	s.Step("verify TLS 1.3 enforcement")
 	t.Run("enforces TLS 1.3", func(t *testing.T) {
-		// Try connecting with TLS 1.2 max — should fail
 		tls12Client := &http.Client{
 			Timeout: 5 * time.Second,
 			Transport: &http.Transport{
@@ -149,9 +97,10 @@ func TestSecureMetrics(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Step 3: Verify unauthenticated requests are rejected
+	// Verify unauthenticated requests are rejected
 	// -------------------------------------------------------------------------
 
+	s.Step("verify unauthenticated requests rejected")
 	t.Run("rejects unauthenticated requests", func(t *testing.T) {
 		require.EventuallyWithT(t, func(collect *assert.CollectT) {
 			resp, err := tlsClient.Get(metricsURL)
@@ -159,19 +108,17 @@ func TestSecureMetrics(t *testing.T) {
 				return
 			}
 			defer func() { _ = resp.Body.Close() }()
-			// controller-runtime returns 401 or 403 for unauthenticated requests
 			assert.True(collect, resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden,
 				"expected 401 or 403 for unauthenticated request, got %d", resp.StatusCode)
 		}, 30*time.Second, 2*time.Second)
 	})
 
 	// -------------------------------------------------------------------------
-	// Step 4: Verify authenticated requests succeed and return metrics
+	// Verify authenticated requests succeed and return metrics
 	// -------------------------------------------------------------------------
 
+	s.Step("verify authenticated metrics access")
 	t.Run("returns metrics with authentication", func(t *testing.T) {
-		// Create a short-lived token for the operator's ServiceAccount which
-		// already has the necessary RBAC to access its own metrics endpoint.
 		cmd := fw.Kubectl(operatorNamespace, "create", "token",
 			"coraza-kubernetes-operator", "--duration=300s")
 		tokenBytes, err := cmd.Output()
@@ -197,7 +144,6 @@ func TestSecureMetrics(t *testing.T) {
 			assert.Equal(collect, http.StatusOK, resp.StatusCode,
 				"expected 200 for authenticated metrics request, got %d: %s", resp.StatusCode, string(body))
 
-			// Verify we get actual Prometheus metrics
 			bodyStr := string(body)
 			assert.Contains(collect, bodyStr, "# HELP",
 				"metrics response should contain Prometheus HELP lines")
@@ -207,11 +153,12 @@ func TestSecureMetrics(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Step 5: Verify TLS connection uses TLS 1.3
+	// Verify TLS connection uses TLS 1.3
 	// -------------------------------------------------------------------------
 
+	s.Step("verify TLS 1.3 negotiated")
 	t.Run("connection uses TLS 1.3", func(t *testing.T) {
-		conn, err := tls.Dial("tcp", fmt.Sprintf("localhost:%s", localPort), &tls.Config{
+		conn, err := tls.Dial("tcp", fmt.Sprintf("localhost:%s", proxy.LocalPort()), &tls.Config{
 			InsecureSkipVerify: true, //nolint:gosec // test against self-signed cert
 		})
 		require.NoError(t, err, "TLS dial should succeed")

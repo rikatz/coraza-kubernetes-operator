@@ -388,3 +388,170 @@ func (g *GatewayProxy) runPortForward(ctx context.Context) error {
 	close(done)
 	return err
 }
+
+// -----------------------------------------------------------------------------
+// PodProxy - Generic Pod Port-Forward
+// -----------------------------------------------------------------------------
+
+// PodProxy manages a port-forward to an arbitrary pod selected by label and
+// exposes the local address. It uses the same maintain/reconnect loop as
+// GatewayProxy.
+type PodProxy struct {
+	s             *Scenario
+	namespace     string
+	labelSelector string
+	localPort     string
+	targetPort    int
+	cancel        context.CancelFunc
+}
+
+// LocalPort returns the allocated local port as a string.
+func (p *PodProxy) LocalPort() string { return p.localPort }
+
+// ProxyToPod sets up a SPDY port-forward to a pod matching labelSelector in
+// namespace, forwarding localPort -> targetPort. The port-forward auto-
+// reconnects and is cleaned up when the scenario ends. The caller is
+// responsible for waiting until the forwarded service is ready (e.g. via
+// require.Eventually with an HTTP probe).
+func (s *Scenario) ProxyToPod(namespace, labelSelector string, targetPort int) *PodProxy {
+	s.T.Helper()
+	port := AllocatePort()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	proxy := &PodProxy{
+		s:             s,
+		namespace:     namespace,
+		labelSelector: labelSelector,
+		localPort:     port,
+		targetPort:    targetPort,
+		cancel:        cancel,
+	}
+
+	// Wait for at least one matching pod to be Ready before starting the
+	// port-forward, avoiding transient connection failures.
+	s.waitForPodReady(namespace, labelSelector)
+
+	go proxy.maintain(ctx)
+
+	s.OnCleanup(func() { cancel() })
+
+	s.T.Logf("Port-forwarding %s (selector=%s) :%d -> localhost:%s",
+		namespace, labelSelector, targetPort, port)
+	return proxy
+}
+
+// waitForPodReady polls until at least one pod matching the selector is Ready.
+func (s *Scenario) waitForPodReady(namespace, labelSelector string) {
+	s.T.Helper()
+	require.Eventually(s.T, func() bool {
+		pods, err := s.F.KubeClient.CoreV1().Pods(namespace).List(
+			s.T.Context(),
+			metav1.ListOptions{LabelSelector: labelSelector},
+		)
+		if err != nil {
+			return false
+		}
+		for _, pod := range pods.Items {
+			if isPodReady(&pod) {
+				return true
+			}
+		}
+		return false
+	}, DefaultTimeout, DefaultInterval,
+		"no ready pods matching %s in %s", labelSelector, namespace,
+	)
+}
+
+func (p *PodProxy) logf(format string, args ...interface{}) {
+	if p.s.T.Context().Err() != nil {
+		return
+	}
+	p.s.T.Logf(format, args...)
+}
+
+func (p *PodProxy) maintain(ctx context.Context) {
+	backoff := time.Second
+	const maxBackoff = 10 * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		start := time.Now()
+		err := p.runPortForward(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			p.logf("port-forward %s (selector=%s) restarting (backoff %s): %v",
+				p.namespace, p.labelSelector, backoff, err)
+		}
+
+		if time.Since(start) > maxBackoff {
+			backoff = time.Second
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+
+		backoff = min(backoff*2, maxBackoff)
+	}
+}
+
+func (p *PodProxy) runPortForward(ctx context.Context) error {
+	pods, err := p.s.F.KubeClient.CoreV1().Pods(p.namespace).List(
+		ctx,
+		metav1.ListOptions{LabelSelector: p.labelSelector},
+	)
+	if err != nil {
+		return fmt.Errorf("list pods: %w", err)
+	}
+	if len(pods.Items) == 0 {
+		return fmt.Errorf("no pods matching %s", p.labelSelector)
+	}
+
+	podName := pods.Items[0].Name
+
+	transport, upgrader, err := spdy.RoundTripperFor(p.s.F.RestConfig)
+	if err != nil {
+		return fmt.Errorf("create SPDY transport: %w", err)
+	}
+
+	pfURL := p.s.F.KubeClient.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(p.namespace).
+		Name(podName).
+		SubResource("portforward").
+		URL()
+
+	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", pfURL)
+
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			close(stopCh)
+		case <-done:
+		}
+	}()
+
+	pf, err := portforward.New(dialer,
+		[]string{fmt.Sprintf("%s:%d", p.localPort, p.targetPort)},
+		stopCh, nil, io.Discard, io.Discard,
+	)
+	if err != nil {
+		close(done)
+		return fmt.Errorf("create port-forwarder: %w", err)
+	}
+
+	err = pf.ForwardPorts()
+	close(done)
+	return err
+}

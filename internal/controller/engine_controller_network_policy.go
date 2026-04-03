@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/go-logr/logr"
@@ -28,6 +30,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -43,6 +48,11 @@ import (
 // -----------------------------------------------------------------------------
 
 const (
+	// networkPolicyFinalizer is added to Engine resources to guarantee that the
+	// cross-namespace NetworkPolicy is deleted before the Engine is removed.
+	// Without this, a missed delete event would orphan the NetworkPolicy.
+	networkPolicyFinalizer = "waf.k8s.coraza.io/network-policy-cleanup"
+
 	// NetworkPolicyNamePrefix is the prefix used for all created NetworkPolicy resources.
 	NetworkPolicyNamePrefix = "coraza-cache-"
 
@@ -57,14 +67,82 @@ const (
 // Engine Controller - NetworkPolicy Naming
 // -----------------------------------------------------------------------------
 
+const (
+	// dns1123MaxLen is the maximum length of a Kubernetes resource name.
+	dns1123MaxLen = 63
+	// hashSuffixLen is the length of the truncated SHA-256 hash suffix
+	// (8 hex characters) plus the separating dash.
+	hashSuffixLen = 9 // "-" + 8 hex chars
+)
+
 func networkPolicyName(engine *wafv1alpha1.Engine) string {
-	return fmt.Sprintf("%s%s-%s", NetworkPolicyNamePrefix, engine.Namespace, engine.Name)
+	return buildNetworkPolicyName(engine.Namespace, engine.Name)
 }
 
 // networkPolicyNameFromReq derives the NetworkPolicy name from a reconcile
 // request. Used for cleanup when the Engine has already been deleted.
 func networkPolicyNameFromReq(req ctrl.Request) string {
-	return fmt.Sprintf("%s%s-%s", NetworkPolicyNamePrefix, req.Namespace, req.Name)
+	return buildNetworkPolicyName(req.Namespace, req.Name)
+}
+
+// buildNetworkPolicyName constructs a DNS-1123 compliant name from the
+// engine namespace and name. When the full name would exceed 63 characters
+// it is truncated and a stable hash suffix is appended to preserve uniqueness.
+func buildNetworkPolicyName(namespace, name string) string {
+	full := fmt.Sprintf("%s%s-%s", NetworkPolicyNamePrefix, namespace, name)
+	if len(full) <= dns1123MaxLen {
+		return full
+	}
+	hash := sha256.Sum256([]byte(full))
+	suffix := hex.EncodeToString(hash[:4]) // 8 hex chars
+	truncated := full[:dns1123MaxLen-hashSuffixLen]
+	return fmt.Sprintf("%s-%s", truncated, suffix)
+}
+
+// -----------------------------------------------------------------------------
+// Engine Controller - NetworkPolicy Finalizer
+// -----------------------------------------------------------------------------
+
+// ensureNetworkPolicyFinalizer adds the finalizer to the Engine if it is not
+// already present. Returns true if the Engine was patched.
+func (r *EngineReconciler) ensureNetworkPolicyFinalizer(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (bool, error) {
+	if controllerutil.ContainsFinalizer(engine, networkPolicyFinalizer) {
+		return false, nil
+	}
+
+	patch := client.MergeFrom(engine.DeepCopy())
+	controllerutil.AddFinalizer(engine, networkPolicyFinalizer)
+	if err := r.Patch(ctx, engine, patch); err != nil {
+		logError(log, req, "Engine", err, "Failed to add NetworkPolicy finalizer")
+		return false, err
+	}
+	logDebug(log, req, "Engine", "Added NetworkPolicy finalizer")
+	return true, nil
+}
+
+// handleNetworkPolicyDeletion cleans up the NetworkPolicy and removes the
+// finalizer so the Engine can be garbage-collected. Returns true when the
+// Engine is being deleted and the caller should stop reconciling.
+func (r *EngineReconciler) handleNetworkPolicyDeletion(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (bool, error) {
+	if engine.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+	if !controllerutil.ContainsFinalizer(engine, networkPolicyFinalizer) {
+		return true, nil
+	}
+
+	if err := r.cleanupNetworkPolicy(ctx, log, req); err != nil {
+		return true, err
+	}
+
+	patch := client.MergeFrom(engine.DeepCopy())
+	controllerutil.RemoveFinalizer(engine, networkPolicyFinalizer)
+	if err := r.Patch(ctx, engine, patch); err != nil {
+		logError(log, req, "Engine", err, "Failed to remove NetworkPolicy finalizer")
+		return true, err
+	}
+	logDebug(log, req, "Engine", "Removed NetworkPolicy finalizer")
+	return true, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -74,15 +152,9 @@ func networkPolicyNameFromReq(req ctrl.Request) string {
 // applyNetworkPolicy creates or updates a NetworkPolicy in the operator namespace
 // that allows ingress from the Engine's gateway pods to the cache server port.
 func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
-	if r.operatorNamespace == "" {
-		logDebug(log, req, "Engine", "Skipping NetworkPolicy: operator namespace not configured")
-		return nil
-	}
-
-	if engine.Spec.Driver == nil || engine.Spec.Driver.Istio == nil ||
-		engine.Spec.Driver.Istio.Wasm == nil || engine.Spec.Driver.Istio.Wasm.WorkloadSelector == nil ||
-		len(engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels) == 0 {
-		return fmt.Errorf("workload selector with at least one label is required for NetworkPolicy creation")
+	ws := workloadSelector(engine)
+	if ws == nil || (len(ws.MatchLabels) == 0 && len(ws.MatchExpressions) == 0) {
+		return fmt.Errorf("workload selector with at least one match criterion is required for NetworkPolicy creation")
 	}
 
 	np := r.buildNetworkPolicy(engine)
@@ -96,13 +168,8 @@ func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logg
 	return nil
 }
 
-// cleanupNetworkPolicy removes the NetworkPolicy associated with a deleted Engine.
-// Called from Reconcile when the Engine is not found (already deleted).
-func (r *EngineReconciler) cleanupNetworkPolicy(ctx context.Context, log logr.Logger, req ctrl.Request) {
-	if r.operatorNamespace == "" {
-		return
-	}
-
+// cleanupNetworkPolicy removes the NetworkPolicy associated with an Engine.
+func (r *EngineReconciler) cleanupNetworkPolicy(ctx context.Context, log logr.Logger, req ctrl.Request) error {
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      networkPolicyNameFromReq(req),
@@ -112,27 +179,35 @@ func (r *EngineReconciler) cleanupNetworkPolicy(ctx context.Context, log logr.Lo
 	if err := r.Delete(ctx, np); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			logError(log, req, "Engine", err, "Failed to cleanup NetworkPolicy")
+			return err
 		}
-		return
+	} else {
+		logInfo(log, req, "Engine", "NetworkPolicy cleaned up", "networkPolicyName", np.Name)
 	}
-	logInfo(log, req, "Engine", "NetworkPolicy cleaned up", "networkPolicyName", np.Name)
+	return nil
 }
 
 // -----------------------------------------------------------------------------
 // Engine Controller - NetworkPolicy Builder
 // -----------------------------------------------------------------------------
 
+// workloadSelector returns the Engine's workload selector, or nil if the
+// driver chain is not fully configured.
+func workloadSelector(engine *wafv1alpha1.Engine) *metav1.LabelSelector {
+	if engine.Spec.Driver == nil || engine.Spec.Driver.Istio == nil ||
+		engine.Spec.Driver.Istio.Wasm == nil {
+		return nil
+	}
+	return engine.Spec.Driver.Istio.Wasm.WorkloadSelector
+}
+
 func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *networkingv1.NetworkPolicy {
 	protocol := corev1.ProtocolTCP
 	port := intstr.FromInt32(int32(DefaultRuleSetCacheServerPort))
 
-	matchLabels := map[string]string{}
-	if engine.Spec.Driver != nil && engine.Spec.Driver.Istio != nil &&
-		engine.Spec.Driver.Istio.Wasm != nil && engine.Spec.Driver.Istio.Wasm.WorkloadSelector != nil {
-		for k, v := range engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels {
-			matchLabels[k] = v
-		}
-	}
+	// Deep-copy the full LabelSelector (MatchLabels + MatchExpressions)
+	// so the NetworkPolicy peer matches the same pods as the WasmPlugin.
+	podSelector := workloadSelector(engine).DeepCopy()
 
 	return &networkingv1.NetworkPolicy{
 		TypeMeta: metav1.TypeMeta{
@@ -164,9 +239,7 @@ func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *netwo
 									"kubernetes.io/metadata.name": engine.Namespace,
 								},
 							},
-							PodSelector: &metav1.LabelSelector{
-								MatchLabels: matchLabels,
-							},
+							PodSelector: podSelector,
 						},
 					},
 					Ports: []networkingv1.NetworkPolicyPort{
@@ -179,6 +252,31 @@ func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *netwo
 			},
 		},
 	}
+}
+
+// -----------------------------------------------------------------------------
+// Engine Controller - NetworkPolicy Watch Predicate
+// -----------------------------------------------------------------------------
+
+// networkPolicyPredicate filters NetworkPolicy watch events to only reconcile
+// on Create and Delete of operator-managed policies. Update events from the
+// controller's own server-side-apply writes are ignored to prevent reconcile
+// loops.
+func networkPolicyPredicate() predicate.Predicate {
+	hasLabel := func(obj client.Object) bool {
+		_, ok := obj.GetLabels()["waf.k8s.coraza.io/engine-name"]
+		return ok
+	}
+
+	return predicate.And(
+		predicate.NewPredicateFuncs(hasLabel),
+		predicate.Funcs{
+			CreateFunc:  func(event.CreateEvent) bool { return true },
+			DeleteFunc:  func(event.DeleteEvent) bool { return true },
+			UpdateFunc:  func(event.UpdateEvent) bool { return false },
+			GenericFunc: func(event.GenericEvent) bool { return false },
+		},
+	)
 }
 
 // -----------------------------------------------------------------------------

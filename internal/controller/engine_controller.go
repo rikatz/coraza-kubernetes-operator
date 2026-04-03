@@ -101,10 +101,7 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}),
 		)).
 		Watches(&networkingv1.NetworkPolicy{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForNetworkPolicy), builder.WithPredicates(
-			predicate.NewPredicateFuncs(func(object client.Object) bool {
-				_, hasLabel := object.GetLabels()["waf.k8s.coraza.io/engine-name"]
-				return hasLabel
-			}),
+			networkPolicyPredicate(),
 		)).
 		WithOptions(controller.Options{
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](
@@ -129,12 +126,30 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Get(ctx, req.NamespacedName, &engine); err != nil {
 		if apierrors.IsNotFound(err) {
 			logDebug(log, req, "Engine", "Resource not found")
-			r.cleanupNetworkPolicy(ctx, log, req)
-			return ctrl.Result{Requeue: false}, nil
+			return ctrl.Result{}, nil
 		}
 
 		logError(log, req, "Engine", err, "Failed to get")
 		return ctrl.Result{Requeue: true}, err
+	}
+
+	// Handle deletion: clean up cross-namespace NetworkPolicy before removing
+	// the finalizer so the Engine can be garbage-collected.
+	if deleting, err := r.handleNetworkPolicyDeletion(ctx, log, req, &engine); deleting || err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Ensure the finalizer is present so we get a chance to clean up
+	// the cross-namespace NetworkPolicy before the Engine is deleted.
+	if added, err := r.ensureNetworkPolicyFinalizer(ctx, log, req, &engine); err != nil {
+		return ctrl.Result{}, err
+	} else if added {
+		// Requeue: the finalizer patch updated the Engine on the API server,
+		// but the informer cache may still serve the old resourceVersion.
+		// Continuing would cause optimistic concurrency conflicts on the
+		// status patches that follow. Requeuing lets the cache catch up so
+		// the next reconcile starts with a consistent object.
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	logDebug(log, req, "Engine", "Applying conditions")
