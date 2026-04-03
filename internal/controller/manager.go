@@ -33,6 +33,11 @@ import (
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="coordination.k8s.io",resources=leases,verbs=get;list;watch;create;update;patch;delete
 
+// Metrics endpoint authentication/authorization (filters.WithAuthenticationAndAuthorization)
+// requires the controller ServiceAccount to perform delegated authn/authz checks.
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+
 // -----------------------------------------------------------------------------
 // Manager - Vars
 // -----------------------------------------------------------------------------

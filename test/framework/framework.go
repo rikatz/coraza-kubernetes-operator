@@ -201,7 +201,9 @@ subjects:
 
 	allResources := metricsRole + "\n---\n" + metricsBinding + "\n---\n" + authRoleYAML + "\n---\n" + authBindingYAML
 
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	// Use framework's Kubectl helper to ensure correct cluster context.
+	// Empty namespace because these are cluster-scoped resources.
+	cmd := f.Kubectl("", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(allResources)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("kubectl apply failed: %w\noutput: %s", err, string(output))
@@ -212,8 +214,10 @@ subjects:
 
 // CleanupMetricsRBAC removes the metrics RBAC resources created during framework initialization.
 func (f *Framework) CleanupMetricsRBAC() {
-	_ = exec.Command("kubectl", "delete", "clusterrolebinding", "coraza-metrics-reader-test").Run()
-	_ = exec.Command("kubectl", "delete", "clusterrole", "coraza-metrics-reader-test").Run()
-	_ = exec.Command("kubectl", "delete", "clusterrolebinding", "coraza-metrics-auth-test").Run()
-	_ = exec.Command("kubectl", "delete", "clusterrole", "coraza-metrics-auth-test").Run()
+	// Use framework's Kubectl helper to ensure cleanup targets the same cluster
+	// context as the tests. Empty namespace because these are cluster-scoped.
+	_ = f.Kubectl("", "delete", "clusterrolebinding", "coraza-metrics-reader-test").Run()
+	_ = f.Kubectl("", "delete", "clusterrole", "coraza-metrics-reader-test").Run()
+	_ = f.Kubectl("", "delete", "clusterrolebinding", "coraza-metrics-auth-test").Run()
+	_ = f.Kubectl("", "delete", "clusterrole", "coraza-metrics-auth-test").Run()
 }
