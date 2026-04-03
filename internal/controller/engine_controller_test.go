@@ -120,18 +120,18 @@ func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
 		},
 	}
 
-	// First reconcile adds the finalizer and requeues.
+	// First reconcile adds the finalizer and returns early (the update
+	// event from the finalizer patch will trigger the next reconcile).
 	result, err := reconciler.Reconcile(ctx, req)
 	require.NoError(t, err)
-	assert.True(t, result.Requeue)
+	assert.False(t, result.Requeue)
 
-	// Second reconcile detects the missing RuleSet.
+	// Second reconcile detects the missing RuleSet and marks Engine degraded.
 	result, err = reconciler.Reconcile(ctx, req)
 
 	t.Log("Verifying reconciliation behavior")
-	if err != nil {
-		assert.True(t, result.Requeue, "Should requeue when RuleSet is not found")
-	}
+	require.NoError(t, err)
+	assert.False(t, result.Requeue)
 }
 
 func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
@@ -180,10 +180,10 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 		},
 	}
 
-	// First reconcile adds the finalizer and requeues.
+	// First reconcile adds the finalizer and returns early.
 	result, err := reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
-	assert.True(t, result.Requeue)
+	assert.False(t, result.Requeue)
 
 	// Second reconcile proceeds with provisioning.
 	result, err = reconciler.Reconcile(ctx, engineReq)
@@ -238,10 +238,10 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 		},
 	}
 
-	// First reconcile adds the finalizer and requeues.
+	// First reconcile adds the finalizer and returns early.
 	result, err := reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
-	assert.True(t, result.Requeue)
+	assert.False(t, result.Requeue)
 
 	// Second reconcile proceeds with status updates.
 	_, err = reconciler.Reconcile(ctx, engineReq)
@@ -328,10 +328,10 @@ func TestEngineReconciler_FailurePolicyInWasmPluginConfig(t *testing.T) {
 				},
 			}
 
-			// First reconcile adds the finalizer and requeues.
+			// First reconcile adds the finalizer and returns early.
 			result, err := reconciler.Reconcile(ctx, req)
 			require.NoError(t, err)
-			assert.True(t, result.Requeue)
+			assert.False(t, result.Requeue)
 
 			// Second reconcile provisions the WasmPlugin.
 			result, err = reconciler.Reconcile(ctx, req)
@@ -479,10 +479,10 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 			},
 		}
 
-		// First reconcile adds the finalizer and requeues.
+		// First reconcile adds the finalizer and returns early.
 		result, err := reconciler.Reconcile(ctx, req)
 		require.NoError(t, err)
-		assert.True(t, result.Requeue)
+		assert.False(t, result.Requeue)
 
 		// Second reconcile provisions the WasmPlugin.
 		result, err = reconciler.Reconcile(ctx, req)
@@ -532,10 +532,10 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 			},
 		}
 
-		// First reconcile adds the finalizer and requeues.
+		// First reconcile adds the finalizer and returns early.
 		result, err := reconciler.Reconcile(ctx, req)
 		require.NoError(t, err)
-		assert.True(t, result.Requeue)
+		assert.False(t, result.Requeue)
 
 		// Second reconcile provisions the WasmPlugin.
 		result, err = reconciler.Reconcile(ctx, req)
@@ -711,10 +711,10 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 		},
 	}
 
-	// First reconcile adds the finalizer and requeues.
+	// First reconcile adds the finalizer and returns early.
 	result, err := reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
-	assert.True(t, result.Requeue)
+	assert.False(t, result.Requeue)
 
 	// Second reconcile detects the degraded RuleSet.
 	result, err = reconciler.Reconcile(ctx, engineReq)
@@ -850,10 +850,11 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 		},
 	}
 
-	// First reconcile adds the finalizer and requeues to let the cache catch up.
+	// First reconcile adds the finalizer and returns early; the update event
+	// from the finalizer patch will trigger the next reconcile.
 	result, err := reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
-	assert.True(t, result.Requeue, "first reconcile should requeue after adding finalizer")
+	assert.False(t, result.Requeue, "first reconcile should not set Requeue after adding finalizer")
 
 	t.Log("Verifying finalizer was added to Engine")
 	var updatedEngine wafv1alpha1.Engine

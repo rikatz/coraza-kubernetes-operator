@@ -130,7 +130,7 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 
 		logError(log, req, "Engine", err, "Failed to get")
-		return ctrl.Result{Requeue: true}, err
+		return ctrl.Result{}, err
 	}
 
 	// Handle deletion: clean up cross-namespace NetworkPolicy before removing
@@ -144,12 +144,11 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if added, err := r.ensureNetworkPolicyFinalizer(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if added {
-		// Requeue: the finalizer patch updated the Engine on the API server,
-		// but the informer cache may still serve the old resourceVersion.
-		// Continuing would cause optimistic concurrency conflicts on the
-		// status patches that follow. Requeuing lets the cache catch up so
-		// the next reconcile starts with a consistent object.
-		return ctrl.Result{Requeue: true}, nil
+		// The finalizer patch updated the Engine on the API server, which
+		// will trigger an update event and a fresh reconcile with the new
+		// resourceVersion. Return early to avoid optimistic concurrency
+		// conflicts on the status patches that follow.
+		return ctrl.Result{}, nil
 	}
 
 	logDebug(log, req, "Engine", "Applying conditions")
