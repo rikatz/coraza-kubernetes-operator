@@ -144,11 +144,11 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if added, err := r.ensureNetworkPolicyFinalizer(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if added {
-		// The finalizer patch updated the Engine on the API server, which
-		// will trigger an update event and a fresh reconcile with the new
-		// resourceVersion. Return early to avoid optimistic concurrency
-		// conflicts on the status patches that follow.
-		return ctrl.Result{}, nil
+		// The finalizer patch updated the Engine on the API server. Because
+		// the Engine watch uses GenerationChangedPredicate (metadata-only
+		// changes don't bump generation), we must explicitly requeue rather
+		// than relying on the update event to trigger a fresh reconcile.
+		return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 	}
 
 	logDebug(log, req, "Engine", "Applying conditions")

@@ -124,6 +124,13 @@ func (c *RuleSetCache) Put(instance string, rules string, datafiles map[string][
 	}
 }
 
+// Len returns the number of instances stored in the cache
+func (c *RuleSetCache) Len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.entries)
+}
+
 // ListKeys returns all instance names stored in the cache
 func (c *RuleSetCache) ListKeys() []string {
 	c.mu.RLock()

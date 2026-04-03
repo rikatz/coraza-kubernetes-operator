@@ -226,6 +226,24 @@ func TestRuleSetCache_Pruning(t *testing.T) {
 	}
 }
 
+func TestRuleSetCache_Len(t *testing.T) {
+	cache := NewRuleSetCache()
+	assert.Equal(t, 0, cache.Len())
+	cache.Put("instance1", "rules1", map[string][]byte{
+		"something.data": []byte("somedata"),
+	})
+	assert.Equal(t, 1, cache.Len())
+	cache.Put("instance2", "rules2", nil)
+	assert.Equal(t, 2, cache.Len())
+	cache.Put("instance3", "rules3", map[string][]byte{
+		"something.data": []byte("another data"),
+	})
+	assert.Equal(t, 3, cache.Len())
+	// Multiple puts to the same instance shouldn't increase Len
+	cache.Put("instance1", "new rules", nil)
+	assert.Equal(t, 3, cache.Len())
+}
+
 func TestRuleSetCache_ListKeys(t *testing.T) {
 	cache := NewRuleSetCache()
 	keys := cache.ListKeys()
