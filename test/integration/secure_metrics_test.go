@@ -122,7 +122,7 @@ func TestSecureMetrics(t *testing.T) {
 	s.Step("verify authenticated metrics access")
 	t.Run("returns metrics with authentication", func(t *testing.T) {
 		cmd := fw.Kubectl(operatorNamespace, "create", "token",
-			"coraza-kubernetes-operator", "--duration=300s")
+			"coraza-kubernetes-operator", "--duration=10m")
 		tokenBytes, err := cmd.Output()
 		require.NoError(t, err, "create service account token")
 		token := strings.TrimSpace(string(tokenBytes))
