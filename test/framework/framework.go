@@ -139,16 +139,17 @@ func New() (*Framework, error) {
 	return fw, nil
 }
 
-// setupMetricsRBAC creates RBAC resources to allow the operator service account
-// to access its /metrics endpoint for integration testing.
+// setupMetricsRBAC creates RBAC to allow the operator service account to access
+// its own /metrics endpoint for integration testing. The operator already has
+// tokenreviews/subjectaccessreviews permissions from the production manifests
+// (needed to validate incoming tokens), so we only need to grant access to the
+// /metrics non-resource URL.
 func (f *Framework) setupMetricsRBAC() error {
 	const (
 		operatorNamespace    = "coraza-system"
 		operatorSA           = "coraza-kubernetes-operator"
 		metricsReaderRole    = "coraza-metrics-reader-test"
 		metricsReaderBinding = "coraza-metrics-reader-test"
-		authRole             = "coraza-metrics-auth-test"
-		authBinding          = "coraza-metrics-auth-test"
 	)
 
 	// ClusterRole for accessing /metrics endpoint
@@ -173,33 +174,7 @@ subjects:
     name: ` + operatorSA + `
     namespace: ` + operatorNamespace
 
-	// ClusterRole for performing authentication (TokenReview) and authorization (SubjectAccessReview)
-	authRoleYAML := `apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: ` + authRole + `
-rules:
-  - apiGroups: ["authentication.k8s.io"]
-    resources: ["tokenreviews"]
-    verbs: ["create"]
-  - apiGroups: ["authorization.k8s.io"]
-    resources: ["subjectaccessreviews"]
-    verbs: ["create"]`
-
-	authBindingYAML := `apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: ` + authBinding + `
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: ` + authRole + `
-subjects:
-  - kind: ServiceAccount
-    name: ` + operatorSA + `
-    namespace: ` + operatorNamespace
-
-	allResources := metricsRole + "\n---\n" + metricsBinding + "\n---\n" + authRoleYAML + "\n---\n" + authBindingYAML
+	allResources := metricsRole + "\n---\n" + metricsBinding
 
 	// Use framework's Kubectl helper to ensure correct cluster context.
 	// Empty namespace because these are cluster-scoped resources.
@@ -218,6 +193,4 @@ func (f *Framework) CleanupMetricsRBAC() {
 	// context as the tests. Empty namespace because these are cluster-scoped.
 	_ = f.Kubectl("", "delete", "clusterrolebinding", "coraza-metrics-reader-test").Run()
 	_ = f.Kubectl("", "delete", "clusterrole", "coraza-metrics-reader-test").Run()
-	_ = f.Kubectl("", "delete", "clusterrolebinding", "coraza-metrics-auth-test").Run()
-	_ = f.Kubectl("", "delete", "clusterrole", "coraza-metrics-auth-test").Run()
 }
