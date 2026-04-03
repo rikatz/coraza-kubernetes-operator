@@ -258,10 +258,12 @@ func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *netwo
 // Engine Controller - NetworkPolicy Watch Predicate
 // -----------------------------------------------------------------------------
 
-// networkPolicyPredicate filters NetworkPolicy watch events to only reconcile
-// on Create and Delete of operator-managed policies. Update events from the
-// controller's own server-side-apply writes are ignored to prevent reconcile
-// loops.
+// networkPolicyPredicate filters NetworkPolicy watch events to reconcile on:
+//   - Create and Delete of operator-managed policies
+//   - Update when the spec changes (generation increments), enabling drift detection
+//
+// Managedfields-only updates (from server-side-apply) don't increment generation,
+// so they won't trigger reconciles, preventing reconcile loops.
 func networkPolicyPredicate() predicate.Predicate {
 	hasLabel := func(obj client.Object) bool {
 		_, ok := obj.GetLabels()["waf.k8s.coraza.io/engine-name"]
@@ -270,12 +272,15 @@ func networkPolicyPredicate() predicate.Predicate {
 
 	return predicate.And(
 		predicate.NewPredicateFuncs(hasLabel),
-		predicate.Funcs{
-			CreateFunc:  func(event.CreateEvent) bool { return true },
-			DeleteFunc:  func(event.DeleteEvent) bool { return true },
-			UpdateFunc:  func(event.UpdateEvent) bool { return false },
-			GenericFunc: func(event.GenericEvent) bool { return false },
-		},
+		predicate.Or(
+			predicate.Funcs{
+				CreateFunc:  func(event.CreateEvent) bool { return true },
+				DeleteFunc:  func(event.DeleteEvent) bool { return true },
+				UpdateFunc:  func(event.UpdateEvent) bool { return false },
+				GenericFunc: func(event.GenericEvent) bool { return false },
+			},
+			predicate.GenerationChangedPredicate{},
+		),
 	)
 }
 

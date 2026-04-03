@@ -346,7 +346,20 @@ func (g *GatewayProxy) runPortForward(ctx context.Context) error {
 		return fmt.Errorf("no pods matching %s", labelSelector)
 	}
 
-	podName := pods.Items[0].Name
+	// Select the first Ready pod. List order is not guaranteed, so we can't
+	// rely on pods.Items[0] being ready even though waitForGatewayPodReady
+	// ensures some pod is ready.
+	var podName string
+	for i := range pods.Items {
+		if isPodReady(&pods.Items[i]) {
+			podName = pods.Items[i].Name
+			break
+		}
+	}
+	if podName == "" {
+		// Fallback to first pod if no ready pod found (e.g., during restart).
+		podName = pods.Items[0].Name
+	}
 
 	transport, upgrader, err := spdy.RoundTripperFor(g.s.F.RestConfig)
 	if err != nil {
@@ -516,7 +529,20 @@ func (p *PodProxy) runPortForward(ctx context.Context) error {
 		return fmt.Errorf("no pods matching %s", p.labelSelector)
 	}
 
-	podName := pods.Items[0].Name
+	// Select the first Ready pod. List order is not guaranteed, so we can't
+	// rely on pods.Items[0] being ready even though waitForPodReady ensures
+	// some pod is ready.
+	var podName string
+	for i := range pods.Items {
+		if isPodReady(&pods.Items[i]) {
+			podName = pods.Items[i].Name
+			break
+		}
+	}
+	if podName == "" {
+		// Fallback to first pod if no ready pod found (e.g., during restart).
+		podName = pods.Items[0].Name
+	}
 
 	transport, upgrader, err := spdy.RoundTripperFor(p.s.F.RestConfig)
 	if err != nil {
