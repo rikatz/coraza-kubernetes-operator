@@ -43,6 +43,8 @@ dist/*
 !SECURITY.md
 !RELEASE.md
 !LIMITATIONS.md
+!CLAUDE.md
+!.claude/skills/**/*.md
 
 # templates
 !.github/*.md
