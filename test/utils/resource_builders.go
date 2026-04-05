@@ -21,7 +21,6 @@ package utils
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -166,7 +165,7 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 	}
 
 	if opts.ImagePullSecret != "" {
-		engine.Spec.Driver.Istio.Wasm.ImagePullSecret = ptr.To(opts.ImagePullSecret)
+		engine.Spec.Driver.Istio.Wasm.ImagePullSecret = new(opts.ImagePullSecret)
 	}
 
 	return engine
