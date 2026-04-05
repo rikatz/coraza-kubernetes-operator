@@ -1,4 +1,86 @@
-# Coraza Kubernetes Operator — Development Guide
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this project is
+
+A Kubernetes operator that manages Web Application Firewall (WAF) deployments using Coraza, integrated with Istio via WASM plugins. Two CRDs — **RuleSet** (aggregates SecLang rules from ConfigMaps) and **Engine** (attaches a RuleSet to a Gateway via Istio WasmPlugin).
+
+Data flow: `ConfigMaps → RuleSetReconciler → RuleSetCache (HTTP server) → WASM plugin in Envoy → traffic filtering`
+
+## Build, test, and lint commands
+
+```bash
+make build                  # Build manager + kubectl-coraza (runs manifests, generate, fmt, vet, lint)
+make test                   # Unit tests (sets ISTIO_VERSION automatically)
+make lint                   # golangci-lint with -build-tags integration
+make lint.fix               # Auto-fix lint issues
+make manifests generate helm.sync  # Regenerate CRDs, RBAC, and sync to Helm chart
+```
+
+Run a single unit test:
+```bash
+ISTIO_VERSION=1.28.2 go test -v -run TestMyFunction ./internal/controller/...
+```
+
+Verify test files compile (go build silently ignores `_test.go`):
+```bash
+ISTIO_VERSION=1.28.2 go test -run ^$ ./...
+```
+
+### Test tiers (require build tags and a cluster)
+
+```bash
+make test.integration       # -tags=integration, needs KIND cluster
+make test.e2e               # -tags=e2e, needs KIND cluster
+make test.conformance       # -tags=conformance, runs CoreRuleSet FTW tests
+```
+
+Without the build tag, `go test` silently finds zero tests.
+
+### Cluster setup
+
+```bash
+make cluster.kind           # Create KIND cluster with Istio + MetalLB + operator
+make clean.cluster.kind     # Destroy it
+```
+
+## Architecture
+
+### Two controllers, shared cache
+
+- **RuleSetReconciler** — watches RuleSet + referenced ConfigMaps/Secrets. Aggregates rules, validates via Coraza, checks for WASM-unsupported rules, stores in RuleSetCache.
+- **EngineReconciler** — watches Engine + referenced RuleSet + Gateways + Pods. When RuleSet is ready, applies a WasmPlugin resource (server-side apply) and discovers matched Gateway pods.
+
+Both are initialized in `internal/controller/manager.go` with a shared `RuleSetCache`.
+
+### RuleSet cache server
+
+In-memory versioned cache (`internal/rulesets/cache/`) with an HTTP server (port 18080). WASM plugins poll `/rules/{instance}/latest` and `/rules/{instance}/data`. Garbage-collected by TTL and size limits.
+
+### Istio prerequisites
+
+When `--operator-name` is set, the manager creates a ServiceEntry + DestinationRule at startup (`engine_controller_istio_prerequisites.go`) so the cache server is mesh-reachable.
+
+### Key directories
+
+- `api/v1alpha1/` — CRD types (Engine, RuleSet, DriverConfig)
+- `internal/controller/` — reconcilers and watch setup
+- `internal/rulesets/` — cache, memfs (virtual FS for rule validation), unsupported rule detection
+- `cmd/manager/` — operator entry point
+- `cmd/kubectl-coraza/` — CLI plugin for rule generation
+- `test/framework/` — integration test helpers (Scenario pattern, port-forwarding, assertions)
+
+## Source of truth and generation pipeline
+
+| Change | Edit (source of truth) | Then run |
+|---|---|---|
+| CRD fields/validation/status | `api/**/*_types.go` | `make manifests helm.sync` |
+| RBAC permissions | `+kubebuilder:rbac` markers in controllers | `make manifests helm.sync` |
+| Helm templates | `charts/.../templates/*.yaml` | nothing |
+| Helm values | `charts/.../values.yaml` | nothing |
+
+**Never edit directly**: `config/crd/bases/*.yaml`, `config/rbac/role.yaml`, `charts/.../crds/*.yaml` — these are all regenerated.
 
 ## Controller patterns and conventions
 
@@ -8,18 +90,6 @@ Unit tests download Istio CRDs at startup. Without `ISTIO_VERSION`, tests fail i
 ```bash
 grep '^ISTIO_VERSION' Makefile
 ```
-
-### `go build` does NOT compile test files
-
-`go build ./...` and `go vet ./...` silently ignore `_test.go` files. To verify test compilation, use `go test -c` or `go test -run ^$`.
-
-### Build tags for test tiers
-
-- Integration: `//go:build integration` — requires `-tags=integration`
-- Conformance: `//go:build conformance` — requires `-tags=conformance`
-- E2E: `//go:build e2e` — requires `-tags=e2e`
-
-Running `go test ./test/integration/...` without the tag finds zero tests silently.
 
 ### GenerationChangedPredicate
 
@@ -88,6 +158,3 @@ s.Step("verify behavior")
 ### Skip validation annotations
 - ConfigMaps: `coraza.io/validation: "false"` — skips per-ConfigMap rule validation
 - RuleSets: `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` — prevents degrading on unsupported rules
-
----
-
