@@ -21,35 +21,23 @@ grep '^ISTIO_VERSION' Makefile
 
 Running `go test ./test/integration/...` without the tag finds zero tests silently.
 
-### Finalizer + GenerationChangedPredicate
+### GenerationChangedPredicate
 
 The Engine controller uses `predicate.GenerationChangedPredicate{}` on its primary watch. Metadata-only changes (labels, annotations, finalizers) do NOT bump `.metadata.generation`, so the update event is filtered out.
 
-When adding a finalizer and returning early, always use `RequeueAfter` (never `Requeue`, which is deprecated):
+If you introduce a finalizer to a controller that uses `GenerationChangedPredicate`, the finalizer-add write won't trigger an update event. You must use `RequeueAfter` (never `Requeue`, which is deprecated) to re-enter reconciliation:
 ```go
 return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 ```
-
-### Two-reconcile pattern in unit tests
-
-Engine unit tests require two `Reconcile()` calls — first adds the finalizer (returns `RequeueAfter`), second does the actual work:
-```go
-result, err := reconciler.Reconcile(ctx, req)
-require.NoError(t, err)
-assert.NotZero(t, result.RequeueAfter)  // finalizer added
-
-result, err = reconciler.Reconcile(ctx, req)
-require.NoError(t, err)
-assert.Zero(t, result.RequeueAfter)     // provisioning done
-```
+This also means unit tests will need two `Reconcile()` calls — the first to add the finalizer, the second to do the actual work. The current EngineReconciler does **not** use a finalizer, so a single `Reconcile()` call is sufficient in its tests.
 
 ### EngineReconciler in tests must set operatorNamespace
 
 The NetworkPolicy logic uses `operatorNamespace` to determine the target namespace. Missing it silently creates resources in the wrong namespace.
 
-### DNS-1123 resource names
+### Kubernetes resource naming limits
 
-Kubernetes names must be <= 63 characters. When constructing names from user input (namespace + name), truncate and append a stable hash suffix. See `buildNetworkPolicyName()` for the reference implementation.
+Kubernetes naming limits depend on the resource type. Many object names use the DNS subdomain constraint and may be up to 253 characters, while some fields and name segments are limited to 63. When constructing names from user input (for example, namespace + name), validate against the specific target resource's constraint and, where needed, truncate and append a stable hash suffix.
 
 ### Watch predicates for SSA-managed resources
 
