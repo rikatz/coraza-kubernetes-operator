@@ -5,7 +5,7 @@
 *.so
 *.dylib
 bin/
-/manager
+./manager
 !cmd/manager
 
 # Container files
