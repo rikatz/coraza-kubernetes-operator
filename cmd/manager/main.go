@@ -29,10 +29,13 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -74,7 +77,13 @@ func main() {
 	logFlags()
 	validateFlags(cfg)
 
-	tlsOpts := buildTLSOpts(cfg.enableHTTP2)
+	tlsOpts := buildTLSOpts()
+
+	podNamespace := os.Getenv("POD_NAMESPACE")
+	if podNamespace == "" {
+		setupLog.Error(errors.New("missing required environment variable"), "POD_NAMESPACE must be set (typically via the downward API)")
+		os.Exit(1)
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
@@ -83,6 +92,7 @@ func main() {
 		HealthProbeBindAddress: cfg.probeAddr,
 		LeaderElection:         cfg.enableLeaderElect,
 		LeaderElectionID:       "waf.k8s.coraza.io",
+		Cache:                  buildCacheOptions(podNamespace),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -90,9 +100,9 @@ func main() {
 	}
 
 	rulesetCache := setupCacheServer(mgr, cfg)
-	setupIstioPrerequisites(mgr, cfg, os.Getenv("POD_NAMESPACE"))
+	setupIstioPrerequisites(mgr, cfg, podNamespace)
 
-	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage); err != nil {
+	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}
@@ -116,8 +126,6 @@ type config struct {
 	metricsAddr       string
 	probeAddr         string
 	enableLeaderElect bool
-	secureMetrics     bool
-	enableHTTP2       bool
 	metricsCertPath   string
 	metricsCertName   string
 	metricsCertKey    string
@@ -138,18 +146,16 @@ func parseFlags() config {
 	var cfg config
 
 	flag.StringVar(&cfg.metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
-		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
+		"Use :8443 for HTTPS or leave as 0 to disable the metrics service.")
 	flag.StringVar(&cfg.probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&cfg.enableLeaderElect, "leader-elect", false, "Enable leader election for controller manager. "+
 		"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&cfg.secureMetrics, "metrics-secure", true, "If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.StringVar(&cfg.webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
 	flag.StringVar(&cfg.webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
 	flag.StringVar(&cfg.webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
 	flag.StringVar(&cfg.metricsCertPath, "metrics-cert-path", "", "The directory that contains the metrics server certificate.")
 	flag.StringVar(&cfg.metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&cfg.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
-	flag.BoolVar(&cfg.enableHTTP2, "enable-http2", false, "If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.DurationVar(&cfg.cacheGCInterval, "cache-gc-interval", cache.CacheGCInterval, "How often to check for and remove stale cache entries in the RuleSet cache")
 	flag.DurationVar(&cfg.cacheMaxAge, "cache-max-age", cache.CacheMaxAge, "Maximum age of a cache entry before it's considered stale in the RuleSet cache")
 	flag.IntVar(&cfg.cacheMaxSize, "cache-max-size", cache.CacheMaxSize, fmt.Sprintf("Maximum total size of all cached rules in the RuleSet cache in bytes (default %dMB)", cache.CacheMaxSize/(1024*1024)))
@@ -185,18 +191,12 @@ func logFlags() {
 	setupLog.Info("configuration", kvs...)
 }
 
-func buildTLSOpts(enableHTTP2 bool) []func(*tls.Config) {
-	if enableHTTP2 {
-		return nil
-	}
-
-	// Disabling http/2 prevents vulnerability to the HTTP/2 Stream Cancellation and
-	// Rapid Reset CVEs. For more information see:
-	// - https://github.com/advisories/GHSA-qppj-fm5r-hxr3
-	// - https://github.com/advisories/GHSA-4374-p667-p6c8
+func buildTLSOpts() []func(*tls.Config) {
 	return []func(*tls.Config){
 		func(c *tls.Config) {
-			setupLog.Info("disabling http/2")
+			c.MinVersion = tls.VersionTLS13
+			// Disable HTTP/2 to mitigate HTTP/2 Rapid Reset (CVE-2023-44487)
+			// and related stream-cancellation DoS attacks.
 			c.NextProtos = []string{"http/1.1"}
 		},
 	}
@@ -204,13 +204,10 @@ func buildTLSOpts(enableHTTP2 bool) []func(*tls.Config) {
 
 func buildMetricsServerOptions(cfg config, tlsOpts []func(*tls.Config)) metricsserver.Options {
 	opts := metricsserver.Options{
-		BindAddress:   cfg.metricsAddr,
-		SecureServing: cfg.secureMetrics,
-		TLSOpts:       tlsOpts,
-	}
-
-	if cfg.secureMetrics {
-		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
+		BindAddress:    cfg.metricsAddr,
+		SecureServing:  true,
+		TLSOpts:        tlsOpts,
+		FilterProvider: filters.WithAuthenticationAndAuthorization,
 	}
 
 	if len(cfg.metricsCertPath) > 0 {
@@ -244,6 +241,22 @@ func setupWebhookServer(cfg config, tlsOpts []func(*tls.Config)) webhook.Server 
 	return webhook.NewServer(opts)
 }
 
+// buildCacheOptions returns cache options that scope the NetworkPolicy informer
+// to the operator namespace. Without this, the controller would require
+// cluster-wide list/watch on NetworkPolicies.
+func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
+	return ctrlcache.Options{
+		DefaultTransform: ctrlcache.TransformStripManagedFields(),
+		ByObject: map[client.Object]ctrlcache.ByObject{
+			&networkingv1.NetworkPolicy{}: {
+				Namespaces: map[string]ctrlcache.Config{
+					operatorNamespace: {},
+				},
+			},
+		},
+	}
+}
+
 func setupCacheServer(mgr ctrl.Manager, cfg config) *cache.RuleSetCache {
 	rulesetCache := cache.NewRuleSetCache()
 	gcConfig := &cache.GarbageCollectionConfig{
@@ -260,8 +273,8 @@ func setupCacheServer(mgr ctrl.Manager, cfg config) *cache.RuleSetCache {
 }
 
 func setupIstioPrerequisites(mgr ctrl.Manager, cfg config, podNamespace string) {
-	if cfg.operatorName == "" || podNamespace == "" {
-		setupLog.Info("Skipping Istio prerequisites: --operator-name and/or POD_NAMESPACE not set")
+	if cfg.operatorName == "" {
+		setupLog.Info("Skipping Istio prerequisites: --operator-name not set")
 		return
 	}
 

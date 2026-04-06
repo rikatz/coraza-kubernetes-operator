@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	networkingv1 "k8s.io/api/networking/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -48,6 +49,7 @@ func TestEngineReconciler_ReconcileNotFound(t *testing.T) {
 		Recorder:                  utils.NewTestRecorder(),
 		ruleSetCacheServerCluster: "test-cluster",
 		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
 	}
 
 	t.Log("Reconciling non-existent engine - should not error")
@@ -59,7 +61,7 @@ func TestEngineReconciler_ReconcileNotFound(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.Zero(t, result.RequeueAfter)
 }
 
 func TestEngineReconciler_BuildWasmPlugin_IstioRevisionLabel(t *testing.T) {
@@ -78,6 +80,7 @@ func TestEngineReconciler_BuildWasmPlugin_IstioRevisionLabel(t *testing.T) {
 
 	noRev := &EngineReconciler{
 		ruleSetCacheServerCluster: "test-cluster",
+		operatorNamespace:         testNamespace,
 	}
 	w2 := noRev.buildWasmPlugin(engine, testWasmOCI)
 	_, has := w2.GetLabels()["istio.io/rev"]
@@ -101,25 +104,35 @@ func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
 		}
 	}()
 
-	t.Log("Reconciling Engine with missing RuleSet - should requeue")
+	t.Log("Reconciling Engine with missing RuleSet")
 	reconciler := &EngineReconciler{
 		Client:                    k8sClient,
 		Scheme:                    scheme,
 		Recorder:                  utils.NewTestRecorder(),
 		ruleSetCacheServerCluster: "test-cluster",
 		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
 	}
-	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+	req := ctrl.Request{
 		NamespacedName: types.NamespacedName{
 			Name:      engine.Name,
 			Namespace: engine.Namespace,
 		},
-	})
+	}
+
+	// First reconcile adds the finalizer and requeues after a short delay
+	// (metadata-only changes don't bump generation, so the predicate would
+	// filter out the update event).
+	result, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+
+	// Second reconcile detects the missing RuleSet and marks Engine degraded.
+	result, err = reconciler.Reconcile(ctx, req)
 
 	t.Log("Verifying reconciliation behavior")
-	if err != nil {
-		assert.True(t, result.Requeue, "Should requeue when RuleSet is not found")
-	}
+	require.NoError(t, err)
+	assert.Zero(t, result.RequeueAfter)
 }
 
 func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
@@ -159,15 +172,24 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 		Recorder:                  recorder,
 		ruleSetCacheServerCluster: "test-cluster",
 		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
 	}
-	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+	engineReq := ctrl.Request{
 		NamespacedName: types.NamespacedName{
 			Name:      engine.Name,
 			Namespace: engine.Namespace,
 		},
-	})
+	}
+
+	// First reconcile adds the finalizer and requeues after a short delay.
+	result, err := reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.NotZero(t, result.RequeueAfter)
+
+	// Second reconcile proceeds with provisioning.
+	result, err = reconciler.Reconcile(ctx, engineReq)
+	require.NoError(t, err)
+	assert.Zero(t, result.RequeueAfter)
 
 	t.Log("Verifying engine status")
 	var updated wafv1alpha1.Engine
@@ -208,13 +230,22 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 		Recorder:                  utils.NewTestRecorder(),
 		ruleSetCacheServerCluster: "test-cluster",
 		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
 	}
-	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+	engineReq := ctrl.Request{
 		NamespacedName: types.NamespacedName{
 			Name:      engine.Name,
 			Namespace: engine.Namespace,
 		},
-	})
+	}
+
+	// First reconcile adds the finalizer and requeues after a short delay.
+	result, err := reconciler.Reconcile(ctx, engineReq)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+
+	// Second reconcile proceeds with status updates.
+	_, err = reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
 
 	t.Log("Verifying status conditions were set")
@@ -224,6 +255,7 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 		Namespace: engine.Namespace,
 	}, &updated)
 	require.NoError(t, err)
+	require.NotNil(t, updated.Status)
 	if len(updated.Status.Conditions) > 0 {
 		condition := updated.Status.Conditions[0]
 		assert.NotEmpty(t, condition.Type)
@@ -288,15 +320,24 @@ func TestEngineReconciler_FailurePolicyInWasmPluginConfig(t *testing.T) {
 				Recorder:                  utils.NewTestRecorder(),
 				ruleSetCacheServerCluster: "test-cluster",
 				defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+				operatorNamespace:         testNamespace,
 			}
-			result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			req := ctrl.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      engine.Name,
 					Namespace: engine.Namespace,
 				},
-			})
+			}
+
+			// First reconcile adds the finalizer and requeues after a short delay.
+			result, err := reconciler.Reconcile(ctx, req)
 			require.NoError(t, err)
-			assert.False(t, result.Requeue)
+			assert.NotZero(t, result.RequeueAfter)
+
+			// Second reconcile provisions the WasmPlugin.
+			result, err = reconciler.Reconcile(ctx, req)
+			require.NoError(t, err)
+			assert.Zero(t, result.RequeueAfter)
 
 			t.Log("Fetching created WasmPlugin")
 			wasmURL, _ := reconciler.wasmPluginOCIURLSource(engine)
@@ -356,6 +397,7 @@ func TestEngineReconciler_ImagePullSecretInWasmPlugin(t *testing.T) {
 		Scheme:                    scheme,
 		Recorder:                  utils.NewTestRecorder(),
 		ruleSetCacheServerCluster: "test-cluster",
+		operatorNamespace:         testNamespace,
 	}
 
 	t.Run("imagePullSecret is set when specified", func(t *testing.T) {
@@ -414,6 +456,7 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 		Scheme:                    scheme,
 		Recorder:                  utils.NewTestRecorder(),
 		ruleSetCacheServerCluster: "test-cluster",
+		operatorNamespace:         testNamespace,
 	}
 
 	t.Run("imagePullSecret persisted in WasmPlugin via server-side apply", func(t *testing.T) {
@@ -430,14 +473,22 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 			}
 		})
 
-		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		req := ctrl.Request{
 			NamespacedName: types.NamespacedName{
 				Name:      engine.Name,
 				Namespace: engine.Namespace,
 			},
-		})
+		}
+
+		// First reconcile adds the finalizer and requeues after a short delay.
+		result, err := reconciler.Reconcile(ctx, req)
 		require.NoError(t, err)
-		assert.False(t, result.Requeue)
+		assert.NotZero(t, result.RequeueAfter)
+
+		// Second reconcile provisions the WasmPlugin.
+		result, err = reconciler.Reconcile(ctx, req)
+		require.NoError(t, err)
+		assert.Zero(t, result.RequeueAfter)
 
 		t.Log("Fetching WasmPlugin from API server")
 		wasmPlugin := &unstructured.Unstructured{}
@@ -475,14 +526,22 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 			}
 		})
 
-		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		req := ctrl.Request{
 			NamespacedName: types.NamespacedName{
 				Name:      engine.Name,
 				Namespace: engine.Namespace,
 			},
-		})
+		}
+
+		// First reconcile adds the finalizer and requeues after a short delay.
+		result, err := reconciler.Reconcile(ctx, req)
 		require.NoError(t, err)
-		assert.False(t, result.Requeue)
+		assert.NotZero(t, result.RequeueAfter)
+
+		// Second reconcile provisions the WasmPlugin.
+		result, err = reconciler.Reconcile(ctx, req)
+		require.NoError(t, err)
+		assert.Zero(t, result.RequeueAfter)
 
 		t.Log("Fetching WasmPlugin from API server")
 		wasmPlugin := &unstructured.Unstructured{}
@@ -644,15 +703,24 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 		Recorder:                  recorder,
 		ruleSetCacheServerCluster: "test-cluster",
 		defaultWasmImage:          "oci://test.example/wasm:latest",
+		operatorNamespace:         testNamespace,
 	}
-	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+	engineReq := ctrl.Request{
 		NamespacedName: types.NamespacedName{
 			Name:      engine.Name,
 			Namespace: engine.Namespace,
 		},
-	})
+	}
+
+	// First reconcile adds the finalizer and requeues after a short delay.
+	result, err := reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.NotZero(t, result.RequeueAfter)
+
+	// Second reconcile detects the degraded RuleSet.
+	result, err = reconciler.Reconcile(ctx, engineReq)
+	require.NoError(t, err)
+	assert.Zero(t, result.RequeueAfter)
 
 	t.Log("Verifying Engine is marked Degraded with reason RuleSetDegraded")
 	var updated wafv1alpha1.Engine
@@ -735,4 +803,124 @@ func TestEngineReconciler_BuildWasmPlugin_WasmImageResolution(t *testing.T) {
 		require.True(t, found)
 		assert.Equal(t, custom, url)
 	})
+}
+
+func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating RuleSet for NetworkPolicy test")
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "netpol-test-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	t.Log("Creating test engine with gateway workload selector")
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "netpol-test-engine",
+		Namespace:   testNamespace,
+		RuleSetName: ruleset.Name,
+		WorkloadLabels: map[string]string{
+			"gateway.networking.k8s.io/gateway-name": "test-gw",
+		},
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
+
+	t.Log("Reconciling engine with operator namespace set")
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+		operatorNamespace:         testNamespace,
+	}
+	engineReq := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	}
+
+	// First reconcile adds the finalizer and requeues after a short delay
+	// (metadata-only changes don't bump generation, so the predicate would
+	// filter out the update event).
+	result, err := reconciler.Reconcile(ctx, engineReq)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter, "first reconcile should requeue after adding finalizer")
+
+	t.Log("Verifying finalizer was added to Engine")
+	var updatedEngine wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: engine.Name, Namespace: engine.Namespace}, &updatedEngine))
+	assert.Contains(t, updatedEngine.Finalizers, "waf.k8s.coraza.io/network-policy-cleanup",
+		"Engine should have the NetworkPolicy cleanup finalizer")
+
+	// Second reconcile proceeds with provisioning.
+	result, err = reconciler.Reconcile(ctx, engineReq)
+	require.NoError(t, err)
+	assert.Zero(t, result.RequeueAfter)
+
+	t.Log("Verifying NetworkPolicy was created")
+	var npList networkingv1.NetworkPolicyList
+	err = k8sClient.List(ctx, &npList,
+		client.InNamespace(testNamespace),
+		engineNetworkPolicyLabels(engine.Namespace, engine.Name),
+	)
+	require.NoError(t, err)
+	require.Len(t, npList.Items, 1, "exactly one NetworkPolicy should exist for the Engine")
+	np := npList.Items[0]
+
+	t.Log("Verifying NetworkPolicy uses GenerateName")
+	assert.True(t, len(np.Name) > len(NetworkPolicyGenerateName), "name should be server-generated")
+
+	t.Log("Verifying NetworkPolicy labels")
+	assert.Equal(t, engine.Name, np.Labels["waf.k8s.coraza.io/engine-name"])
+	assert.Equal(t, engine.Namespace, np.Labels["waf.k8s.coraza.io/engine-namespace"])
+	assert.Equal(t, "coraza-kubernetes-operator", np.Labels["app.kubernetes.io/managed-by"])
+
+	t.Log("Verifying NetworkPolicy targets operator pods")
+	assert.Equal(t, operatorPodLabelValue, np.Spec.PodSelector.MatchLabels[operatorPodLabelKey])
+
+	t.Log("Verifying NetworkPolicy allows ingress only from gateway pods")
+	require.Len(t, np.Spec.PolicyTypes, 1)
+	assert.Equal(t, networkingv1.PolicyTypeIngress, np.Spec.PolicyTypes[0])
+	require.Len(t, np.Spec.Ingress, 1)
+	require.Len(t, np.Spec.Ingress[0].From, 1)
+
+	peer := np.Spec.Ingress[0].From[0]
+	require.NotNil(t, peer.NamespaceSelector)
+	assert.Equal(t, engine.Namespace, peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"])
+	require.NotNil(t, peer.PodSelector)
+	assert.Equal(t, "test-gw", peer.PodSelector.MatchLabels["gateway.networking.k8s.io/gateway-name"])
+
+	t.Log("Verifying NetworkPolicy allows only cache server port")
+	require.Len(t, np.Spec.Ingress[0].Ports, 1)
+	assert.Equal(t, int32(DefaultRuleSetCacheServerPort), np.Spec.Ingress[0].Ports[0].Port.IntVal)
+
+	t.Log("Verifying finalizer blocks deletion and cleans up NetworkPolicy")
+	require.NoError(t, k8sClient.Delete(ctx, engine))
+
+	// The Engine should still exist (blocked by finalizer) but have a DeletionTimestamp.
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: engine.Name, Namespace: engine.Namespace}, &updatedEngine))
+	assert.False(t, updatedEngine.DeletionTimestamp.IsZero(), "Engine should have a deletion timestamp")
+
+	// Reconcile processes the finalizer: cleans up NetworkPolicy and removes the finalizer.
+	_, err = reconciler.Reconcile(ctx, engineReq)
+	require.NoError(t, err)
+
+	err = k8sClient.List(ctx, &npList,
+		client.InNamespace(testNamespace),
+		engineNetworkPolicyLabels(engine.Namespace, engine.Name),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, npList.Items, "NetworkPolicy should be deleted after finalizer runs")
 }

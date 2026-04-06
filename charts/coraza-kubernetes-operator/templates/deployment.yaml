@@ -46,8 +46,12 @@ spec:
             - --leader-elect=true
             - --health-probe-bind-address=:8081
             {{- if .Values.metrics.enabled }}
-            - --metrics-bind-address=:8082
-            - --metrics-secure=false
+            - --metrics-bind-address=:8443
+            {{- if .Values.metrics.certSecret }}
+            - --metrics-cert-path=/etc/metrics-certs
+            - --metrics-cert-name={{ .Values.metrics.certName | default "tls.crt" }}
+            - --metrics-cert-key={{ .Values.metrics.keyName | default "tls.key" }}
+            {{- end }}
             {{- end }}
             - --envoy-cluster-name={{ printf "outbound|80||%s" (include "coraza-operator.serviceFQDN" .) }}
             - --cache-gc-interval=3s
@@ -100,12 +104,24 @@ spec:
             periodSeconds: 10
             successThreshold: 1
             failureThreshold: 3
+          {{- if .Values.metrics.certSecret }}
+          volumeMounts:
+            - name: metrics-certs
+              mountPath: /etc/metrics-certs
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           {{- with .Values.resizePolicy }}
           resizePolicy:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- if .Values.metrics.certSecret }}
+      volumes:
+        - name: metrics-certs
+          secret:
+            secretName: {{ .Values.metrics.certSecret }}
+      {{- end }}
       serviceAccountName: {{ include "coraza-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10
       {{- with .Values.nodeSelector }}

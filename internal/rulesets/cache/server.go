@@ -189,7 +189,7 @@ func (s *ruleSetCacheServer) handleGetRules(w http.ResponseWriter, _ *http.Reque
 		return
 	}
 
-	s.logger.Info("Serving rules from cache", "cacheKey", cacheKey, "uuid", entry.UUID, "availableKeys", s.cache.ListKeys(), "cacheSizeBytes", s.cache.TotalSize())
+	s.logger.Info("Serving rules from cache", "cacheKey", cacheKey, "uuid", entry.UUID, "availableKeysCount", s.cache.Len(), "cacheSizeBytes", s.cache.TotalSize())
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

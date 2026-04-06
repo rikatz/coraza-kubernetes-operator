@@ -56,6 +56,17 @@ const WasmPluginNamePrefix = "coraza-engine-"
 // provisionIstioEngineWithWasm provisions the Istio WasmPlugin resource for
 // the Engine.
 func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log logr.Logger, req ctrl.Request, engine wafv1alpha1.Engine) (ctrl.Result, error) {
+	// Apply NetworkPolicy first to ensure network restrictions are in place
+	// before the WasmPlugin starts running. This prevents a partially-provisioned
+	// state where the plugin is active without the intended cache-server network
+	// restrictions.
+	if err := r.applyNetworkPolicy(ctx, log, req, &engine); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "NetworkPolicyFailed", fmt.Sprintf("Failed to apply NetworkPolicy: %v", err)); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+
 	wasmPlugin, err := r.applyWasmPlugin(ctx, log, req, &engine)
 	if err != nil {
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "ProvisioningFailed", fmt.Sprintf("Failed to create or update WasmPlugin: %v", err)); patchErr != nil {
