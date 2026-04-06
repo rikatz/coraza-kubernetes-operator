@@ -159,7 +159,10 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		pluginConfig["rule_reload_interval_seconds"] = *engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds
 	}
 
-	matchLabels := engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels
+	var matchLabels map[string]string
+	if engine.Spec.Driver.Istio.Wasm.WorkloadSelector != nil {
+		matchLabels = engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels
+	}
 	if matchLabels == nil {
 		matchLabels = map[string]string{}
 	}

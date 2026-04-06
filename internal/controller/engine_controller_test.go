@@ -565,6 +565,125 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 	})
 }
 
+func TestEngineReconciler_HandleInvalidDriverConfiguration_NilStatus(t *testing.T) {
+	ctx := context.Background()
+
+	engine := &wafv1alpha1.Engine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nil-status-engine",
+			Namespace: testNamespace,
+		},
+		Spec: wafv1alpha1.EngineSpec{
+			RuleSet: wafv1alpha1.RuleSetReference{Name: "test-ruleset"},
+		},
+	}
+	// Status is nil (zero value for *EngineStatus).
+	require.Nil(t, engine.Status, "precondition: Status must be nil")
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+
+	// handleInvalidDriverConfiguration must not panic when engine.Status is nil.
+	err := reconciler.handleInvalidDriverConfiguration(ctx, ctrl.Log, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	}, engine)
+	require.Error(t, err, "should return an error for invalid driver configuration")
+	assert.Contains(t, err.Error(), "invalid driver configuration")
+	assert.NotNil(t, engine.Status, "Status should be initialized after the call")
+}
+
+func TestEngineReconciler_SelectDriver_NilStatus(t *testing.T) {
+	ctx := context.Background()
+
+	// Create and persist the engine so the status patch inside
+	// handleInvalidDriverConfiguration can talk to the API server.
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:      "selectdriver-nil-status",
+		Namespace: testNamespace,
+	})
+	// Remove the driver so selectDriver falls through to handleInvalidDriverConfiguration.
+	engine.Spec.Driver = nil
+	// CRD validation blocks a nil driver, so use a valid driver config for creation,
+	// then modify in-memory before calling selectDriver directly.
+	validEngine := utils.NewTestEngine(utils.EngineOptions{
+		Name:      "selectdriver-nil-status",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, validEngine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, validEngine); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
+
+	// Fetch back the persisted engine and strip the driver + status.
+	var fetched wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+		Name:      validEngine.Name,
+		Namespace: validEngine.Namespace,
+	}, &fetched))
+	fetched.Spec.Driver = nil
+	fetched.Status = nil
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+
+	// selectDriver must not panic when Status is nil and driver is invalid.
+	_, err := reconciler.selectDriver(ctx, ctrl.Log, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      fetched.Name,
+			Namespace: fetched.Namespace,
+		},
+	}, fetched)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid driver configuration")
+}
+
+func TestEngineReconciler_BuildWasmPlugin_NilWorkloadSelector(t *testing.T) {
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:      "nil-ws-engine",
+		Namespace: testNamespace,
+	})
+	// Set WorkloadSelector to nil — this previously caused a panic.
+	engine.Spec.Driver.Istio.Wasm.WorkloadSelector = nil
+
+	reconciler := &EngineReconciler{
+		ruleSetCacheServerCluster: "test-cluster",
+	}
+
+	// buildWasmPlugin must not panic when WorkloadSelector is nil.
+	wp := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest")
+	require.NotNil(t, wp)
+
+	// Verify the selector still has an empty matchLabels map.
+	spec, found, err := getNestedMap(wp.Object, "spec")
+	require.NoError(t, err)
+	require.True(t, found)
+	selector, found, err := getNestedMap(spec, "selector")
+	require.NoError(t, err)
+	require.True(t, found)
+	labels, found := selector["matchLabels"]
+	require.True(t, found, "matchLabels should be present even with nil WorkloadSelector")
+	labelsMap, ok := labels.(map[string]string)
+	require.True(t, ok)
+	assert.Empty(t, labelsMap, "matchLabels should be empty when WorkloadSelector is nil")
+}
+
 func TestEngineReconciler_ValidationRejection(t *testing.T) {
 	ctx := context.Background()
 
