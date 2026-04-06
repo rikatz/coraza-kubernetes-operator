@@ -126,6 +126,12 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Get(ctx, req.NamespacedName, &engine); err != nil {
 		if apierrors.IsNotFound(err) {
 			logDebug(log, req, "Engine", "Resource not found")
+			// Best-effort cleanup: remove any orphaned NetworkPolicy that may
+			// remain if the Engine was deleted before the finalizer was added
+			// (e.g., race during upgrade or legacy Engine without finalizer).
+			if cleanupErr := r.cleanupNetworkPolicy(ctx, log, req); cleanupErr != nil {
+				return ctrl.Result{}, cleanupErr
+			}
 			return ctrl.Result{}, nil
 		}
 
