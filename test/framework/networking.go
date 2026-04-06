@@ -33,13 +33,10 @@ func AllocatePort() string {
 // GatewayProxy manages a port-forward to a Gateway and provides HTTP
 // assertion helpers for testing WAF behavior.
 type GatewayProxy struct {
-	s         *Scenario
-	namespace string
-	gateway   string
-	localPort string
-	baseURL   string
-	httpc     *http.Client
-	cancel    context.CancelFunc
+	s       *Scenario
+	baseURL string
+	httpc   *http.Client
+	cancel  context.CancelFunc
 }
 
 // ProxyToGateway sets up a SPDY port-forward to the named Gateway's pod
@@ -51,19 +48,17 @@ func (s *Scenario) ProxyToGateway(namespace, gatewayName string) *GatewayProxy {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	proxy := &GatewayProxy{
-		s:         s,
-		namespace: namespace,
-		gateway:   gatewayName,
-		localPort: port,
-		baseURL:   fmt.Sprintf("http://localhost:%s", port),
-		httpc:     &http.Client{Timeout: 10 * time.Second},
-		cancel:    cancel,
+		s:       s,
+		baseURL: fmt.Sprintf("http://localhost:%s", port),
+		httpc:   &http.Client{Timeout: 10 * time.Second},
+		cancel:  cancel,
 	}
 
 	// Wait for the gateway pod to be Ready before starting port-forward.
 	s.waitForGatewayPodReady(namespace, gatewayName)
 
-	go proxy.maintain(ctx)
+	loop := newGatewayPortForwardLoop(s, namespace, gatewayName, port)
+	go loop.maintain(ctx)
 
 	// Wait for the port-forward to accept connections.
 	require.Eventually(s.T, func() bool {
@@ -282,20 +277,32 @@ func (g *GatewayProxy) ExpectHeaderStatus(path string, headers map[string]string
 }
 
 // -----------------------------------------------------------------------------
-// Gateway - Port Forward Management
+// Shared Port-Forward Loop
 // -----------------------------------------------------------------------------
+
+// portForwardLoop implements the maintain/reconnect loop and port-forward
+// setup shared by GatewayProxy and PodProxy. The only varying part is the
+// label selector and port mapping, which are provided as fields.
+type portForwardLoop struct {
+	s             *Scenario
+	namespace     string
+	labelSelector string
+	localPort     string
+	portMapping   string // e.g. "12345:80"
+	label         string // human-readable label for log messages
+}
 
 // logf logs via t.Logf if the test is still running. The maintain goroutine
 // may outlive the test, and t.Logf panics after the test finishes (Go 1.24+).
 // t.Context() is cancelled when the test completes, so we check it first.
-func (g *GatewayProxy) logf(format string, args ...any) {
-	if g.s.T.Context().Err() != nil {
+func (l *portForwardLoop) logf(format string, args ...any) {
+	if l.s.T.Context().Err() != nil {
 		return
 	}
-	g.s.T.Logf(format, args...)
+	l.s.T.Logf(format, args...)
 }
 
-func (g *GatewayProxy) maintain(ctx context.Context) {
+func (l *portForwardLoop) maintain(ctx context.Context) {
 	backoff := time.Second
 	const maxBackoff = 10 * time.Second
 
@@ -307,13 +314,13 @@ func (g *GatewayProxy) maintain(ctx context.Context) {
 		}
 
 		start := time.Now()
-		err := g.runPortForward(ctx)
+		err := l.runPortForward(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		if err != nil {
-			g.logf("port-forward %s/%s restarting (backoff %s): %v",
-				g.namespace, g.gateway, backoff, err)
+			l.logf("port-forward %s restarting (backoff %s): %v",
+				l.label, backoff, err)
 		}
 
 		if time.Since(start) > maxBackoff {
@@ -330,32 +337,40 @@ func (g *GatewayProxy) maintain(ctx context.Context) {
 	}
 }
 
-func (g *GatewayProxy) runPortForward(ctx context.Context) error {
-	labelSelector := fmt.Sprintf(
-		"gateway.networking.k8s.io/gateway-name=%s", g.gateway,
-	)
-
-	pods, err := g.s.F.KubeClient.CoreV1().Pods(g.namespace).List(
+func (l *portForwardLoop) runPortForward(ctx context.Context) error {
+	pods, err := l.s.F.KubeClient.CoreV1().Pods(l.namespace).List(
 		ctx,
-		metav1.ListOptions{LabelSelector: labelSelector},
+		metav1.ListOptions{LabelSelector: l.labelSelector},
 	)
 	if err != nil {
 		return fmt.Errorf("list pods: %w", err)
 	}
 	if len(pods.Items) == 0 {
-		return fmt.Errorf("no pods matching %s", labelSelector)
+		return fmt.Errorf("no pods matching %s", l.labelSelector)
 	}
 
-	podName := pods.Items[0].Name
+	// Select the first Ready pod. List order is not guaranteed, so we
+	// pick the first ready one rather than relying on index 0.
+	var podName string
+	for i := range pods.Items {
+		if isPodReady(&pods.Items[i]) {
+			podName = pods.Items[i].Name
+			break
+		}
+	}
+	if podName == "" {
+		// Fallback to first pod if no ready pod found (e.g., during restart).
+		podName = pods.Items[0].Name
+	}
 
-	transport, upgrader, err := spdy.RoundTripperFor(g.s.F.RestConfig)
+	transport, upgrader, err := spdy.RoundTripperFor(l.s.F.RestConfig)
 	if err != nil {
 		return fmt.Errorf("create SPDY transport: %w", err)
 	}
 
-	pfURL := g.s.F.KubeClient.CoreV1().RESTClient().Post().
+	pfURL := l.s.F.KubeClient.CoreV1().RESTClient().Post().
 		Resource("pods").
-		Namespace(g.namespace).
+		Namespace(l.namespace).
 		Name(podName).
 		SubResource("portforward").
 		URL()
@@ -376,7 +391,7 @@ func (g *GatewayProxy) runPortForward(ctx context.Context) error {
 	}()
 
 	pf, err := portforward.New(dialer,
-		[]string{fmt.Sprintf("%s:80", g.localPort)},
+		[]string{l.portMapping},
 		stopCh, nil, io.Discard, io.Discard,
 	)
 	if err != nil {
@@ -387,4 +402,94 @@ func (g *GatewayProxy) runPortForward(ctx context.Context) error {
 	err = pf.ForwardPorts()
 	close(done)
 	return err
+}
+
+// newGatewayPortForwardLoop creates a portForwardLoop configured for a Gateway pod.
+func newGatewayPortForwardLoop(s *Scenario, namespace, gateway, localPort string) *portForwardLoop {
+	return &portForwardLoop{
+		s:             s,
+		namespace:     namespace,
+		labelSelector: fmt.Sprintf("gateway.networking.k8s.io/gateway-name=%s", gateway),
+		localPort:     localPort,
+		portMapping:   fmt.Sprintf("%s:80", localPort),
+		label:         fmt.Sprintf("%s/%s", namespace, gateway),
+	}
+}
+
+// newPodPortForwardLoop creates a portForwardLoop configured for an arbitrary pod selector.
+func newPodPortForwardLoop(s *Scenario, namespace, labelSelector, localPort string, targetPort int) *portForwardLoop {
+	return &portForwardLoop{
+		s:             s,
+		namespace:     namespace,
+		labelSelector: labelSelector,
+		localPort:     localPort,
+		portMapping:   fmt.Sprintf("%s:%d", localPort, targetPort),
+		label:         fmt.Sprintf("%s (selector=%s)", namespace, labelSelector),
+	}
+}
+
+// -----------------------------------------------------------------------------
+// PodProxy - Generic Pod Port-Forward
+// -----------------------------------------------------------------------------
+
+// PodProxy manages a port-forward to an arbitrary pod selected by label and
+// exposes the local address. It uses the same maintain/reconnect loop as
+// GatewayProxy.
+type PodProxy struct {
+	localPort string
+	cancel    context.CancelFunc
+}
+
+// LocalPort returns the allocated local port as a string.
+func (p *PodProxy) LocalPort() string { return p.localPort }
+
+// ProxyToPod sets up a SPDY port-forward to a pod matching labelSelector in
+// namespace, forwarding localPort -> targetPort. The port-forward auto-
+// reconnects and is cleaned up when the scenario ends. The caller is
+// responsible for waiting until the forwarded service is ready (e.g. via
+// require.Eventually with an HTTP probe).
+func (s *Scenario) ProxyToPod(namespace, labelSelector string, targetPort int) *PodProxy {
+	s.T.Helper()
+	port := AllocatePort()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	proxy := &PodProxy{
+		localPort: port,
+		cancel:    cancel,
+	}
+
+	// Wait for at least one matching pod to be Ready before starting the
+	// port-forward, avoiding transient connection failures.
+	s.waitForPodReady(namespace, labelSelector)
+
+	loop := newPodPortForwardLoop(s, namespace, labelSelector, port, targetPort)
+	go loop.maintain(ctx)
+
+	s.OnCleanup(func() { cancel() })
+
+	s.T.Logf("Port-forwarding %s (selector=%s) :%d -> localhost:%s",
+		namespace, labelSelector, targetPort, port)
+	return proxy
+}
+
+// waitForPodReady polls until at least one pod matching the selector is Ready.
+func (s *Scenario) waitForPodReady(namespace, labelSelector string) {
+	s.T.Helper()
+	require.Eventually(s.T, func() bool {
+		pods, err := s.F.KubeClient.CoreV1().Pods(namespace).List(
+			s.T.Context(),
+			metav1.ListOptions{LabelSelector: labelSelector},
+		)
+		if err != nil {
+			return false
+		}
+		for _, pod := range pods.Items {
+			if isPodReady(&pod) {
+				return true
+			}
+		}
+		return false
+	}, DefaultTimeout, DefaultInterval,
+		"no ready pods matching %s in %s", labelSelector, namespace,
+	)
 }

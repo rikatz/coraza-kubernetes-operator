@@ -123,11 +123,74 @@ func New() (*Framework, error) {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
-	return &Framework{
+	fw := &Framework{
 		RestConfig:           config,
 		KubeClient:           kubeClient,
 		DynamicClient:        dynamicClient,
 		ClusterName:          clusterName,
 		IstioGatewayRevision: strings.TrimSpace(os.Getenv("ISTIO_GATEWAY_REVISION")),
-	}, nil
+	}
+
+	// Set up operator metrics RBAC for integration tests
+	if err := fw.setupMetricsRBAC(); err != nil {
+		return nil, fmt.Errorf("failed to setup metrics RBAC: %w", err)
+	}
+
+	return fw, nil
+}
+
+// setupMetricsRBAC creates RBAC to allow the operator service account to access
+// its own /metrics endpoint for integration testing. The operator already has
+// tokenreviews/subjectaccessreviews permissions from the production manifests
+// (needed to validate incoming tokens), so we only need to grant access to the
+// /metrics non-resource URL.
+func (f *Framework) setupMetricsRBAC() error {
+	const (
+		operatorNamespace    = "coraza-system"
+		operatorSA           = "coraza-kubernetes-operator"
+		metricsReaderRole    = "coraza-metrics-reader-test"
+		metricsReaderBinding = "coraza-metrics-reader-test"
+	)
+
+	// ClusterRole for accessing /metrics endpoint
+	metricsRole := `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ` + metricsReaderRole + `
+rules:
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]`
+
+	metricsBinding := `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ` + metricsReaderBinding + `
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ` + metricsReaderRole + `
+subjects:
+  - kind: ServiceAccount
+    name: ` + operatorSA + `
+    namespace: ` + operatorNamespace
+
+	allResources := metricsRole + "\n---\n" + metricsBinding
+
+	// Use framework's Kubectl helper to ensure correct cluster context.
+	// Empty namespace because these are cluster-scoped resources.
+	cmd := f.Kubectl("", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(allResources)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("kubectl apply failed: %w\noutput: %s", err, string(output))
+	}
+
+	return nil
+}
+
+// CleanupMetricsRBAC removes the metrics RBAC resources created during framework initialization.
+func (f *Framework) CleanupMetricsRBAC() {
+	// Use framework's Kubectl helper to ensure cleanup targets the same cluster
+	// context as the tests. Empty namespace because these are cluster-scoped.
+	_ = f.Kubectl("", "delete", "clusterrolebinding", "coraza-metrics-reader-test").Run()
+	_ = f.Kubectl("", "delete", "clusterrole", "coraza-metrics-reader-test").Run()
 }

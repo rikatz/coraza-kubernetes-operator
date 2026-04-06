@@ -33,6 +33,11 @@ import (
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="coordination.k8s.io",resources=leases,verbs=get;list;watch;create;update;patch;delete
 
+// Metrics endpoint authentication/authorization (filters.WithAuthenticationAndAuthorization)
+// requires the controller ServiceAccount to perform delegated authn/authz checks.
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+
 // -----------------------------------------------------------------------------
 // Manager - Vars
 // -----------------------------------------------------------------------------
@@ -46,7 +51,7 @@ const DefaultRuleSetCacheServerPort = 18080
 // -----------------------------------------------------------------------------
 
 // SetupControllers initializes all controllers
-func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision, defaultWasmImage string) error {
+func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision, defaultWasmImage, operatorNamespace string) error {
 	if err := (&RuleSetReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -63,6 +68,7 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyC
 		ruleSetCacheServerCluster: envoyClusterName,
 		istioRevision:             istioRevision,
 		defaultWasmImage:          defaultWasmImage,
+		operatorNamespace:         operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller Engine: %w", err)
 	}

@@ -45,5 +45,12 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(fmt.Sprintf("failed to initialize test framework: %v", err))
 	}
-	os.Exit(m.Run())
+
+	// Run tests
+	code := m.Run()
+
+	// Cleanup metrics RBAC
+	fw.CleanupMetricsRBAC()
+
+	os.Exit(code)
 }

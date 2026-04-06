@@ -379,12 +379,16 @@ helm.sync-crds: manifests ## Copy generated CRDs into the Helm chart
 	cp config/crd/bases/*.yaml $(HELM_CHART_DIR)/crds/
 
 .PHONY: helm.sync-rbac
-helm.sync-rbac: manifests ## Sync generated RBAC rules into the Helm chart ClusterRole
+helm.sync-rbac: manifests ## Sync generated RBAC rules into the Helm chart ClusterRole and Role
 	@GEN=config/rbac/role.yaml; \
-	CHART=$(HELM_CHART_DIR)/templates/clusterrole.yaml; \
-	sed '/^rules:/q' "$$CHART" > "$$CHART.tmp" && \
-	sed '1,/^rules:/d' "$$GEN" >> "$$CHART.tmp" && \
-	mv "$$CHART.tmp" "$$CHART"
+	CR_CHART=$(HELM_CHART_DIR)/templates/clusterrole.yaml; \
+	sed '/^rules:/q' "$$CR_CHART" > "$$CR_CHART.tmp" && \
+	awk '/^kind: ClusterRole/{found=1} found && /^rules:/{start=1; next} start && /^---/{exit} start{print}' "$$GEN" >> "$$CR_CHART.tmp" && \
+	mv "$$CR_CHART.tmp" "$$CR_CHART"; \
+	R_CHART=$(HELM_CHART_DIR)/templates/role.yaml; \
+	sed '/^rules:/q' "$$R_CHART" > "$$R_CHART.tmp" && \
+	awk '/^kind: Role/{found=1} found && /^rules:/{start=1; next} start && /^---/{exit} start{print}' "$$GEN" >> "$$R_CHART.tmp" && \
+	mv "$$R_CHART.tmp" "$$R_CHART"
 
 .PHONY: helm.sync
 helm.sync: helm.sync-crds helm.sync-rbac ## Sync all generated resources into the Helm chart

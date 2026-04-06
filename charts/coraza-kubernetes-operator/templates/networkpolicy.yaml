@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "coraza-operator.fullname" . }}-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "coraza-operator.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Health probes (startup, liveness, readiness) — the kubelet connects
+    # from the node IP so no source restriction is applied.
+    - ports:
+        - port: 8081
+          protocol: TCP
+    {{- if .Values.metrics.enabled }}
+    # Metrics endpoint (HTTPS with authentication).
+    - ports:
+        - port: 8443
+          protocol: TCP
+    {{- end }}
+    # Cache server port (18080) is NOT listed here on purpose.
+    # Per-Engine NetworkPolicies are created dynamically by the controller
+    # to allow only the specific gateway workloads that need cache access.
+    # Kubernetes NetworkPolicies are additive, so those policies extend
+    # this one without conflict.
