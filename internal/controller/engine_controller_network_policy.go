@@ -239,9 +239,9 @@ func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *netwo
 			GenerateName: NetworkPolicyGenerateName,
 			Namespace:    r.operatorNamespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":       "coraza-kubernetes-operator",
-				networkPolicyEngineLabelName:         engine.Name,
-				networkPolicyEngineLabelNamespace:    engine.Namespace,
+				"app.kubernetes.io/managed-by":    "coraza-kubernetes-operator",
+				networkPolicyEngineLabelName:      engine.Name,
+				networkPolicyEngineLabelNamespace: engine.Namespace,
 			},
 		},
 		Spec: networkingv1.NetworkPolicySpec{
