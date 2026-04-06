@@ -604,16 +604,10 @@ func TestEngineReconciler_HandleInvalidDriverConfiguration_NilStatus(t *testing.
 func TestEngineReconciler_SelectDriver_NilStatus(t *testing.T) {
 	ctx := context.Background()
 
-	// Create and persist the engine so the status patch inside
+	// Create and persist a valid engine so the status patch inside
 	// handleInvalidDriverConfiguration can talk to the API server.
-	engine := utils.NewTestEngine(utils.EngineOptions{
-		Name:      "selectdriver-nil-status",
-		Namespace: testNamespace,
-	})
-	// Remove the driver so selectDriver falls through to handleInvalidDriverConfiguration.
-	engine.Spec.Driver = nil
-	// CRD validation blocks a nil driver, so use a valid driver config for creation,
-	// then modify in-memory before calling selectDriver directly.
+	// CRD validation blocks a nil driver, so create a valid resource first,
+	// then modify the fetched object in-memory before calling selectDriver directly.
 	validEngine := utils.NewTestEngine(utils.EngineOptions{
 		Name:      "selectdriver-nil-status",
 		Namespace: testNamespace,
