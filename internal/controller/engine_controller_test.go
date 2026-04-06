@@ -648,34 +648,64 @@ func TestEngineReconciler_SelectDriver_NilStatus(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid driver configuration")
 }
 
-func TestEngineReconciler_BuildWasmPlugin_NilWorkloadSelector(t *testing.T) {
+func TestEngineReconciler_NilWorkloadSelector_MarksDegraded(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a valid engine so the status patch inside
+	// provisionIstioEngineWithWasm can talk to the API server.
 	engine := utils.NewTestEngine(utils.EngineOptions{
-		Name:      "nil-ws-engine",
-		Namespace: testNamespace,
+		Name:        "nil-ws-engine",
+		Namespace:   testNamespace,
+		RuleSetName: "test-ruleset",
 	})
-	// Set WorkloadSelector to nil — this previously caused a panic.
-	engine.Spec.Driver.Istio.Wasm.WorkloadSelector = nil
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
 
 	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
 		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	engineReq := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
 	}
 
-	// buildWasmPlugin must not panic when WorkloadSelector is nil.
-	wp := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest")
-	require.NotNil(t, wp)
+	// Fetch the persisted engine and strip WorkloadSelector in-memory to
+	// simulate bypassed CRD validation (e.g. direct API write). We cannot
+	// use k8sClient.Update because the CRD webhook rejects the change.
+	var fetched wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, engineReq.NamespacedName, &fetched))
+	fetched.Spec.Driver.Istio.Wasm.WorkloadSelector = nil
+	if fetched.Status == nil {
+		fetched.Status = &wafv1alpha1.EngineStatus{}
+	}
 
-	// Verify the selector still has an empty matchLabels map.
-	spec, found, err := getNestedMap(wp.Object, "spec")
-	require.NoError(t, err)
-	require.True(t, found)
-	selector, found, err := getNestedMap(spec, "selector")
-	require.NoError(t, err)
-	require.True(t, found)
-	labels, found := selector["matchLabels"]
-	require.True(t, found, "matchLabels should be present even with nil WorkloadSelector")
-	labelsMap, ok := labels.(map[string]string)
-	require.True(t, ok)
-	assert.Empty(t, labelsMap, "matchLabels should be empty when WorkloadSelector is nil")
+	// Call provisionIstioEngineWithWasm directly — it should detect the nil
+	// WorkloadSelector and mark the Engine Degraded instead of creating a
+	// WasmPlugin that matches all workloads.
+	_, err := reconciler.provisionIstioEngineWithWasm(ctx, ctrl.Log, engineReq, fetched)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workloadSelector is required")
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, engineReq.NamespacedName, &updated))
+	require.NotNil(t, updated.Status)
+
+	degradedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Degraded")
+	require.NotNil(t, degradedCond, "Engine should have Degraded condition")
+	assert.Equal(t, metav1.ConditionTrue, degradedCond.Status)
+	assert.Equal(t, "InvalidConfiguration", degradedCond.Reason)
+	assert.Contains(t, degradedCond.Message, "workloadSelector is required")
 }
 
 func TestEngineReconciler_ValidationRejection(t *testing.T) {
