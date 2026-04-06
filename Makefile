@@ -265,7 +265,7 @@ coreruleset.verify-parity:
 
 .PHONY: test.conformance
 test.conformance: coreruleset.verify-parity
-	cd test/conformance &&  $(CONFORMANCE_EXTRA_FLAGS) FTW_CONFIG=$(shell pwd)/test/conformance/ftw.yml TESTMANIFESTS_PATH=$(CORERULESET_DIR)/tests/tests RULESET_PATH=$(LOCALRULES)/rules.yaml KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=conformance ./... -v
+	cd test/conformance &&  $(CONFORMANCE_EXTRA_FLAGS) FTW_CONFIG=$(shell pwd)/test/conformance/ftw.yml FTW_OVERRIDES=$(shell pwd)/test/conformance/.ftw-overrides.yml TESTMANIFESTS_PATH=$(CORERULESET_DIR)/tests/tests RULESET_PATH=$(LOCALRULES)/rules.yaml KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=conformance ./... -v
 
 # -------------------------------------------------------------------------------
 # OLM Bundle

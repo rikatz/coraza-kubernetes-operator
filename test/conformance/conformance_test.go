@@ -64,6 +64,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	require.NotEmpty(t, testManifestsLocation, "TESTMANIFESTS_PATH must contain the path with the directory containing FTW test manifests")
 	configFile := os.Getenv("FTW_CONFIG")
 	require.NotEmpty(t, configFile, "FTW_CONFIG must contain the full path for the ftw.yml file")
+	overridesFile := os.Getenv("FTW_OVERRIDES") // optional: platform-specific output overrides
 
 	_, err := os.Stat(ruleLocation)
 	require.NoError(t, err, "RULESET_PATH must be a valid and existing path for the ruleset")
@@ -249,6 +250,10 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	runnerConfig.ReadTimeout = 10 * time.Second
 	runnerConfig.FailFast = false
 	runnerConfig.Include = includeTests
+	if overridesFile != "" {
+		err = runnerConfig.LoadPlatformOverrides(overridesFile)
+		require.NoError(t, err, "error loading platform overrides from %s", overridesFile)
+	}
 	res, err := runner.Run(runnerConfig, tests, testOutput)
 	require.NoError(t, err, "error running conformance")
 

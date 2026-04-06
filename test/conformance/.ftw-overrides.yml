@@ -1,0 +1,236 @@
+# Platform overrides for CRS tests running against Coraza in Envoy/Istio WASM environment.
+#
+# Instead of ignoring tests where Envoy provides enhanced security (handling requests
+# before the WAF sees them), we override the expected output to match Envoy's behavior.
+# This ensures we catch regressions if Envoy's behavior changes.
+#
+# See also: https://github.com/corazawaf/coraza/blob/main/testing/coreruleset/.ftw-overrides.yml
+---
+version: "v0.0.0"
+meta:
+  engine: "coraza"
+  platform: "envoy-wasm"
+  annotations:
+    - purpose: "Overrides for CRS tests running against Coraza deployed as Envoy WASM plugin via Istio"
+    - environment: "kubernetes"
+test_overrides:
+  # =============================================================================
+  # ENHANCED SECURITY: Envoy provides BETTER protection than expected by CRS tests.
+  # These are NOT security gaps - Envoy blocks/sanitizes BEFORE reaching the WAF.
+  # By overriding instead of ignoring, we can catch regressions.
+  # =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # Invalid HTTP Methods/Requests - Rejected by Envoy with 400
+  # ---------------------------------------------------------------------------
+  - rule_id: 911100
+    test_ids: [5, 7]
+    reason: "Invalid HTTP method rejected by Envoy with 400 before reaching WAF"
+    output:
+      status: 400
+      log:
+        no_expect_ids: [911100]
+
+  - rule_id: 920100
+    test_ids: [10, 14]
+    reason: "Invalid HTTP method rejected by Envoy with 400 before reaching WAF"
+    output:
+      status: 400
+      log:
+        no_expect_ids: [920100]
+
+  - rule_id: 920100
+    test_ids: [16]
+    reason: "Invalid HTTP request line rejected by Envoy with 400 before reaching WAF"
+    output:
+      status: 400
+      log:
+        no_expect_ids: [920100]
+
+  - rule_id: 949110
+    test_ids: [4]
+    reason: "Invalid HTTP method rejected by Envoy with 400 before reaching WAF"
+    output:
+      status: 400
+      log:
+        no_expect_ids: [949110]
+
+  # ---------------------------------------------------------------------------
+  # Valid Requests Accepted by Envoy
+  # These methods are only disabled by default in Apache/Nginx, not in Envoy
+  # ---------------------------------------------------------------------------
+  - rule_id: 920100
+    test_ids: [4]
+    reason: "Valid request accepted by Envoy (method only disabled by default in Apache/Nginx)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920100]
+
+  - rule_id: 920100
+    test_ids: [8]
+    reason: "Valid request accepted by Envoy (method only disabled by default in Apache)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920100]
+
+  # ---------------------------------------------------------------------------
+  # HTTP Protocol Enforcement - Envoy strict validation
+  # ---------------------------------------------------------------------------
+  - rule_id: 920181
+    test_ids: [1]
+    reason: "Content-Length with Transfer-Encoding rejected by Envoy with 400"
+    output:
+      status: 400
+      log:
+        no_expect_ids: [920181]
+
+  # ---------------------------------------------------------------------------
+  # Connection Header Stripping - Envoy proxy behavior
+  # Envoy strips Connection header before WAF inspection, request passes through
+  # ---------------------------------------------------------------------------
+  - rule_id: 920210
+    test_ids: [2, 3, 4, 6, 7]
+    reason: "Connection header stripped by Envoy before reaching WAF"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920210]
+
+  # ---------------------------------------------------------------------------
+  # HTTP/2 Header Normalization - Missing/Empty headers
+  # Envoy enforces HTTP/2 protocol compliance by adding/normalizing headers
+  # ---------------------------------------------------------------------------
+  - rule_id: 920280
+    test_ids: [1, 3]
+    reason: "Envoy crafts Host header from :authority pseudo-header (HTTP/2)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920280]
+
+  - rule_id: 920290
+    test_ids: [1, 4]
+    reason: "Envoy crafts Host header from :authority pseudo-header (HTTP/2)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920290]
+
+  - rule_id: 920300
+    test_ids: [1]
+    reason: "Envoy adds default Accept header in HTTP/2"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920300]
+
+  - rule_id: 920310
+    test_ids: [1, 4]
+    reason: "Envoy normalizes empty Accept header"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920310]
+
+  - rule_id: 920311
+    test_ids: [1]
+    reason: "Envoy normalizes empty Content-Type header"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920311]
+
+  - rule_id: 920320
+    test_ids: [1]
+    reason: "Envoy adds default User-Agent header"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920320]
+
+  - rule_id: 920330
+    test_ids: [1]
+    reason: "Envoy normalizes missing Content-Type on POST"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920330]
+
+  - rule_id: 920610
+    test_ids: [2]
+    reason: "Envoy normalizes empty Content-Type on POST"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [920610]
+
+  # ---------------------------------------------------------------------------
+  # Referer Header Sanitization - Envoy security feature
+  # Envoy sanitizes malicious payloads in Referer BEFORE WAF inspection,
+  # so the attack is neutralized but the WAF rule doesn't trigger
+  # ---------------------------------------------------------------------------
+  - rule_id: 932161
+    test_ids: [7, 9, 10, 11, 12]
+    reason: "Referer header sanitized by Envoy (invalid characters removed)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [932161]
+
+  - rule_id: 932207
+    test_ids: [1, 2, 7]
+    reason: "Envoy sanitizes malicious Referer (RCE payload neutralized upstream)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [932207]
+
+  - rule_id: 932237
+    test_ids: [4, 12]
+    reason: "Referer header sanitized by Envoy (invalid characters removed)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [932237]
+
+  - rule_id: 932239
+    test_ids: [6, 7, 19, 27, 29]
+    reason: "Referer header sanitized by Envoy (invalid characters removed)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [932239]
+
+  - rule_id: 941101
+    test_ids: [1]
+    reason: "Referer header sanitized by Envoy (XSS payload neutralized upstream)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [941101]
+
+  - rule_id: 941110
+    test_ids: [4]
+    reason: "Referer header sanitized by Envoy (XSS payload neutralized upstream)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [941110]
+
+  - rule_id: 941120
+    test_ids: [49, 50]
+    reason: "Envoy sanitizes malicious Referer (XSS payload neutralized upstream)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [941120]
+
+  - rule_id: 942280
+    test_ids: [3]
+    reason: "Envoy sanitizes malicious Referer (SQLi payload neutralized upstream)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [942280]
