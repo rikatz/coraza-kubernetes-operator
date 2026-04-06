@@ -227,8 +227,11 @@ func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *netwo
 	protocol := corev1.ProtocolTCP
 	port := intstr.FromInt32(int32(DefaultRuleSetCacheServerPort))
 
-	// Deep-copy the full LabelSelector (MatchLabels + MatchExpressions)
-	// so the NetworkPolicy peer matches the same pods as the WasmPlugin.
+	// Deep-copy the Engine workload selector (including MatchLabels and
+	// MatchExpressions) so the NetworkPolicy restricts ingress to the workloads
+	// selected by the Engine configuration. Do not assume this exactly matches
+	// WasmPlugin selector semantics unless that builder also preserves the full
+	// LabelSelector.
 	podSelector := workloadSelector(engine).DeepCopy()
 
 	return &networkingv1.NetworkPolicy{
