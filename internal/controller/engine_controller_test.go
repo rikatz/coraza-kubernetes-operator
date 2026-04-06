@@ -870,12 +870,17 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	assert.Zero(t, result.RequeueAfter)
 
 	t.Log("Verifying NetworkPolicy was created")
-	var np networkingv1.NetworkPolicy
-	err = k8sClient.Get(ctx, types.NamespacedName{
-		Name:      networkPolicyName(engine),
-		Namespace: testNamespace,
-	}, &np)
-	require.NoError(t, err, "NetworkPolicy should exist after Engine reconciliation")
+	var npList networkingv1.NetworkPolicyList
+	err = k8sClient.List(ctx, &npList,
+		client.InNamespace(testNamespace),
+		engineNetworkPolicyLabels(engine.Namespace, engine.Name),
+	)
+	require.NoError(t, err)
+	require.Len(t, npList.Items, 1, "exactly one NetworkPolicy should exist for the Engine")
+	np := npList.Items[0]
+
+	t.Log("Verifying NetworkPolicy uses GenerateName")
+	assert.True(t, len(np.Name) > len(NetworkPolicyGenerateName), "name should be server-generated")
 
 	t.Log("Verifying NetworkPolicy labels")
 	assert.Equal(t, engine.Name, np.Labels["waf.k8s.coraza.io/engine-name"])
@@ -912,63 +917,10 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	_, err = reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
 
-	err = k8sClient.Get(ctx, types.NamespacedName{
-		Name:      networkPolicyName(engine),
-		Namespace: testNamespace,
-	}, &np)
-	assert.True(t, client.IgnoreNotFound(err) == nil, "NetworkPolicy should be deleted after finalizer runs")
-}
-
-func TestBuildNetworkPolicyName(t *testing.T) {
-	tests := []struct {
-		name      string
-		namespace string
-		engine    string
-		wantExact string // empty means just check length + stability
-	}{
-		{
-			name:      "short name is unchanged",
-			namespace: "default",
-			engine:    "my-engine",
-			wantExact: "coraza-cache-default-my-engine",
-		},
-		{
-			name:      "exactly 63 chars is unchanged",
-			namespace: "my-namespace",
-			engine:    "my-engine-with-a-very-long-name-to-hit-exactly",
-			// "coraza-cache-" (13) + "my-namespace" (12) + "-" (1) + 37 = 63
-		},
-		{
-			name:      "64 chars gets truncated with hash",
-			namespace: "my-namespace",
-			engine:    "my-engine-with-a-very-long-name-to-hit-exactly-x",
-		},
-		{
-			name:      "very long names are truncated to 63 chars",
-			namespace: "a-]very-long-namespace-name-that-is-way-too-long",
-			engine:    "a-very-long-engine-name-that-is-also-way-too-long",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := buildNetworkPolicyName(tt.namespace, tt.engine)
-
-			assert.LessOrEqual(t, len(result), 63, "name must not exceed 63 characters: %s (%d)", result, len(result))
-
-			if tt.wantExact != "" {
-				assert.Equal(t, tt.wantExact, result)
-			}
-
-			// Verify stability: same inputs produce the same name.
-			assert.Equal(t, result, buildNetworkPolicyName(tt.namespace, tt.engine))
-		})
-	}
-
-	t.Run("different inputs produce different names even when truncated", func(t *testing.T) {
-		long := "a-very-long-name-that-will-definitely-be-truncated-past-limit"
-		name1 := buildNetworkPolicyName("namespace", long+"-alpha")
-		name2 := buildNetworkPolicyName("namespace", long+"-bravo")
-		assert.NotEqual(t, name1, name2, "truncated names with different inputs must differ due to hash")
-	})
+	err = k8sClient.List(ctx, &npList,
+		client.InNamespace(testNamespace),
+		engineNetworkPolicyLabels(engine.Namespace, engine.Name),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, npList.Items, "NetworkPolicy should be deleted after finalizer runs")
 }
