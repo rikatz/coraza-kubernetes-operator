@@ -10,73 +10,12 @@ testoverride:
     # =============================================================================
     # Environmental Behavior - Not fixable in Coraza/WASM
     # See: LIMITATIONS.md for detailed explanations
+    #
+    # NOTE: ENHANCED SECURITY tests (Category 1) have been moved to
+    # .ftw-overrides.yml as platform overrides. Instead of ignoring them,
+    # we now override the expected output to match Envoy's actual behavior,
+    # allowing us to catch regressions.
     # =============================================================================
-
-    # ---------------------------------------------------------------------------
-    # CATEGORY 1: ENHANCED SECURITY - Envoy provides BETTER protection
-    # These are NOT security gaps - Envoy blocks/sanitizes BEFORE reaching WAF
-    # IMPACT: Positive for security, negative for conformance testing only
-    # ---------------------------------------------------------------------------
-
-    # Invalid HTTP Methods/Requests - Rejected by Envoy (6 tests)
-    '911100-5': 'ENHANCED: Invalid HTTP method rejected by Envoy with 400'
-    '911100-7': 'ENHANCED: Invalid HTTP method rejected by Envoy with 400'
-    '920100-10': 'ENHANCED: Invalid HTTP method rejected by Envoy with 400'
-    '920100-14': 'ENHANCED: Invalid HTTP method rejected by Envoy with 400'
-    '920100-16': 'ENHANCED: Invalid HTTP request line rejected by Envoy with 400'
-    '949110-4': 'ENHANCED: Invalid HTTP method rejected by Envoy with 400'
-
-    # Valid Requests Accepted by Envoy (2 tests)
-    # Note: These methods are only disabled by default in Apache/Nginx
-    '920100-4': 'ENHANCED: Valid request accepted by Envoy (only disabled by default in Apache/Nginx)'
-    '920100-8': 'ENHANCED: Valid request accepted by Envoy (only disabled by default in Apache)'
-
-    # HTTP Protocol Enforcement - Envoy strict validation (1 test)
-    '920181-1': 'ENHANCED: Content-Length with Transfer-Encoding rejected by Envoy with 400'
-
-    # Connection Header Stripping - Envoy proxy behavior (5 tests)
-    '920210-2': 'ENHANCED: Connection header stripped by Envoy'
-    '920210-3': 'ENHANCED: Connection header stripped by Envoy'
-    '920210-4': 'ENHANCED: Connection header stripped by Envoy'
-    '920210-6': 'ENHANCED: Connection header stripped by Envoy'
-    '920210-7': 'ENHANCED: Connection header stripped by Envoy'
-
-    # HTTP/2 Header Normalization - Missing/Empty headers (11 tests)
-    # Envoy enforces HTTP/2 protocol compliance by adding/normalizing headers
-    '920280-1': 'ENHANCED: Envoy crafts Host header from :authority pseudo-header (HTTP/2)'
-    '920280-3': 'ENHANCED: Envoy crafts Host header from :authority pseudo-header (HTTP/2)'
-    '920290-1': 'ENHANCED: Envoy crafts Host header from :authority pseudo-header (HTTP/2)'
-    '920290-4': 'ENHANCED: Envoy crafts Host header from :authority pseudo-header (HTTP/2)'
-    '920300-1': 'ENHANCED: Envoy adds default Accept header in HTTP/2'
-    '920310-1': 'ENHANCED: Envoy normalizes empty Accept header'
-    '920310-4': 'ENHANCED: Envoy normalizes empty Accept header'
-    '920311-1': 'ENHANCED: Envoy normalizes empty Content-Type header'
-    '920320-1': 'ENHANCED: Envoy adds default User-Agent header'
-    '920330-1': 'ENHANCED: Envoy normalizes missing Content-Type on POST'
-    '920610-2': 'ENHANCED: Envoy normalizes empty Content-Type on POST'
-
-    # Referer Header Sanitization - Envoy security feature (20 tests)
-    # Envoy sanitizes malicious payloads in Referer BEFORE WAF inspection
-    '932161-7': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932161-9': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932161-10': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932161-11': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932161-12': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932207-1': 'ENHANCED: Envoy sanitizes malicious Referer (RCE blocked upstream)'
-    '932207-2': 'ENHANCED: Envoy sanitizes malicious Referer (RCE blocked upstream)'
-    '932207-7': 'ENHANCED: Envoy sanitizes malicious Referer (RCE blocked upstream)'
-    '932237-4': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932237-12': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932239-6': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932239-7': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932239-19': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932239-27': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '932239-29': 'ENHANCED: Referer header sanitized by Envoy (invalid characters removed)'
-    '941101-1': 'ENHANCED: Referer header sanitized by Envoy (XSS blocked upstream)'
-    '941110-4': 'ENHANCED: Referer header sanitized by Envoy (XSS blocked upstream)'
-    '941120-49': 'ENHANCED: Envoy sanitizes malicious Referer (XSS blocked upstream)'
-    '941120-50': 'ENHANCED: Envoy sanitizes malicious Referer (XSS blocked upstream)'
-    '942280-3': 'ENHANCED: Envoy sanitizes malicious Referer (SQLi blocked upstream)'
 
     # ---------------------------------------------------------------------------
     # CATEGORY 2: TOOL LIMITATION - WASM/Envoy limitation causes false negatives
@@ -292,16 +231,10 @@ testoverride:
     '980170-3': 'INVESTIGATE: retry_once mechanism not working in environment'
 
     # =============================================================================
-    # Summary of Ignored Tests by Category (Total: 190 tests):
+    # Summary of Ignored Tests by Category (Total: 145 tests):
     #
-    # CATEGORY 1: ENHANCED SECURITY (45 tests)
-    #   - Envoy provides better protection than expected
-    #   - Invalid HTTP methods/requests: 6 tests
-    #   - Valid requests accepted: 2 tests
-    #   - Protocol enforcement: 1 test
-    #   - Connection header stripping: 5 tests
-    #   - HTTP/2 header normalization: 11 tests
-    #   - Referer sanitization: 20 tests
+    # NOTE: 45 ENHANCED SECURITY tests moved to .ftw-overrides.yml as platform
+    # overrides (they now run with adjusted expectations instead of being skipped).
     #
     # CATEGORY 2: TOOL LIMITATION (113 tests)
     #   - Environmental constraints that could cause false negatives
@@ -327,5 +260,5 @@ testoverride:
     #   - PL4 false positives: 2 tests
     #   - retry_once: 5 tests
     #
-    # Test Pass Rate: ~94% (190 ignored out of ~3,300 total tests)
+    # Test Pass Rate: ~95% (145 ignored + 45 overridden out of ~3,300 total tests)
     # =============================================================================
