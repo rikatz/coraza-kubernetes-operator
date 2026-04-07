@@ -30,6 +30,11 @@ metrics:
   serviceMonitor:
     enabled: false
 
+logging:
+  # When true, uses console encoder with debug level (development mode).
+  # When false (default), uses JSON encoder with info level (production mode).
+  development: false
+
 istio:
   # When empty, the operator does not set an Istio revision label on managed resources.
   revision: ""

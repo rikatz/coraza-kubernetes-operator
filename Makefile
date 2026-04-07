@@ -114,13 +114,14 @@ install: deploy ## Alias for deploy (Helm installs CRDs and operator together)
 uninstall: undeploy ## Alias for undeploy
 
 .PHONY: deploy
-deploy: helm.sync ## Deploy operator into the cluster using Helm
+deploy: helm.sync ## Deploy operator into the cluster using Helm (dev logging enabled)
 	helm upgrade --install $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
 		--namespace $(HELM_RELEASE_NAMESPACE) \
 		--create-namespace \
 		--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
 		--set image.tag=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG) \
-		--set istio.revision=$(ISTIO_GATEWAY_REVISION)
+		--set istio.revision=$(ISTIO_GATEWAY_REVISION) \
+		--set logging.development=true
 
 .PHONY: undeploy
 undeploy: ## Remove operator from the cluster using Helm

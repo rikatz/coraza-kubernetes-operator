@@ -166,7 +166,7 @@ func parseFlags() config {
 		"Default OCI reference for the Coraza WASM plugin when an Engine omits spec.driver.istio.wasm.image")
 	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
 
-	opts := zap.Options{Development: true}
+	var opts zap.Options
 	opts.BindFlags(flag.CommandLine)
 
 	flag.Parse()
