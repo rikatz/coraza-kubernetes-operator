@@ -58,10 +58,12 @@ spec:
                   driver specifies the driver configuration for the engine. This
                   determines how the WAF engine will be deployed and integrated with some
                   implementation. Currently only supports Istio ingress Gateways.
+                minProperties: 0
                 properties:
                   istio:
                     description: istio configures the Engine to integrate with Istio
                       service mesh.
+                    minProperties: 0
                     properties:
                       wasm:
                         description: wasm configures the Engine to be deployed as
@@ -225,6 +227,7 @@ spec:
               rule: has(self.driver)
           status:
             description: status defines the observed state of Engine.
+            minProperties: 0
             properties:
               conditions:
                 description: |-
