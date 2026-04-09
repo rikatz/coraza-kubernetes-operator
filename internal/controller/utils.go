@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 
 	"github.com/go-logr/logr"
@@ -358,35 +359,48 @@ func serverSideApply(ctx context.Context, c client.Client, desired *unstructured
 // Error Messaging Helpers
 // -----------------------------------------------------------------------------
 
-func sanitizeErrorMessage(err error) error {
-	matches := sanitizeFilePath.FindStringSubmatch(err.Error())
-
-	if len(matches) < 2 {
-		return err
+// extractMissingFileBasename extracts the base filename from a missing-file
+// error by walking the error chain for *fs.PathError with fs.ErrNotExist.
+// Returns the basename and true when a structured PathError is found; ("", false)
+// otherwise.
+func extractMissingFileBasename(err error) (string, bool) {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrNotExist) {
+		return filepath.Base(pathErr.Path), true
 	}
-
-	// matches[1] is the full path. filepath.Base pulls the last element.
-	fileName := filepath.Base(matches[1])
-
-	return fmt.Errorf("open %s: data does not exist", fileName)
-
+	return "", false
 }
 
-// shouldSkipMissingFileError reports whether a missing-file validation error should
-// be skipped because the file is present in secretData.
+// sanitizeErrorMessage replaces filesystem paths in missing-file errors with
+// just the base filename to prevent disclosure of container-internal paths.
+//
+// Detection order:
+//  1. Structured: walk error chain for *fs.PathError + fs.ErrNotExist.
+//  2. Fail-safe: if errors.Is(err, fs.ErrNotExist) but no PathError found,
+//     return a generic redacted message.
+//  3. Non-file errors pass through unchanged.
+func sanitizeErrorMessage(err error) error {
+	if basename, ok := extractMissingFileBasename(err); ok {
+		return fmt.Errorf("open %s: data does not exist", basename)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return errors.New("validation failed: referenced file does not exist (path redacted)")
+	}
+	return err
+}
+
+// shouldSkipMissingFileError reports whether a missing-file validation error
+// should be skipped because the file is present in secretData. Uses the same
+// structured extraction as sanitizeErrorMessage for consistency.
 func shouldSkipMissingFileError(err error, secretData map[string][]byte) bool {
 	if secretData == nil {
 		return false
 	}
-
-	matches := sanitizeFilePath.FindStringSubmatch(err.Error())
-	if len(matches) < 2 {
+	basename, ok := extractMissingFileBasename(err)
+	if !ok {
 		return false
 	}
-
-	fileName := filepath.Base(matches[1])
-
-	_, exists := secretData[fileName]
+	_, exists := secretData[basename]
 	return exists
 }
 

@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"regexp"
 	"time"
 
 	"github.com/corazawaf/coraza/v3"
@@ -39,10 +38,6 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
-)
-
-var (
-	sanitizeFilePath = regexp.MustCompile(`open (.+): no such file or directory`)
 )
 
 // -----------------------------------------------------------------------------
