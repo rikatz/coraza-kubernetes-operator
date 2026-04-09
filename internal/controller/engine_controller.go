@@ -243,9 +243,6 @@ func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logge
 		logAPIError(log, req, "Engine", err, "Failed to get RuleSet", nil)
 		return false, fmt.Errorf("failed to get RuleSet %s: %w", engine.Spec.RuleSet.Name, err)
 	}
-	if ruleSet.Status == nil {
-		return false, nil
-	}
 
 	degradedCond := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
 	if degradedCond == nil || degradedCond.Status != metav1.ConditionTrue {

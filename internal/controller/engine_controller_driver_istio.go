@@ -151,8 +151,8 @@ func (r *EngineReconciler) wasmPluginOCIURLSource(engine *wafv1alpha1.Engine) (u
 		return r.defaultWasmImage, false
 	}
 	w := engine.Spec.Driver.Istio.Wasm
-	if w.Image != nil && *w.Image != "" {
-		return *w.Image, true
+	if w.Image != "" {
+		return w.Image, true
 	}
 	return r.defaultWasmImage, false
 }
@@ -161,8 +161,8 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 	rulesetKey := fmt.Sprintf("%s/%s", engine.Namespace, engine.Spec.RuleSet.Name)
 
 	failurePolicy := wafv1alpha1.FailurePolicyFail
-	if engine.Spec.FailurePolicy != nil {
-		failurePolicy = *engine.Spec.FailurePolicy
+	if engine.Spec.FailurePolicy != "" {
+		failurePolicy = engine.Spec.FailurePolicy
 	}
 
 	pluginConfig := map[string]any{
@@ -171,8 +171,8 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		"failure_policy":        string(failurePolicy),
 	}
 
-	if engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer != nil && engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds != nil {
-		pluginConfig["rule_reload_interval_seconds"] = *engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds
+	if engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer != nil {
+		pluginConfig["rule_reload_interval_seconds"] = engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds
 	}
 
 	matchLabels := engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels
@@ -198,9 +198,9 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		},
 	}
 
-	if engine.Spec.Driver.Istio.Wasm.ImagePullSecret != nil {
+	if engine.Spec.Driver.Istio.Wasm.ImagePullSecret != "" {
 		spec := wasmPlugin.Object["spec"].(map[string]any)
-		spec["imagePullSecret"] = *engine.Spec.Driver.Istio.Wasm.ImagePullSecret
+		spec["imagePullSecret"] = engine.Spec.Driver.Istio.Wasm.ImagePullSecret
 	}
 
 	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{

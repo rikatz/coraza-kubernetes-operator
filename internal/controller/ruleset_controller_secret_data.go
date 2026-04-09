@@ -51,8 +51,8 @@ func (r *RuleSetReconciler) loadRuleDataSecret(
 	ruleset *wafv1alpha1.RuleSet,
 ) (map[string][]byte, bool, error) {
 	var ruleDataName string
-	if ruleset.Spec.RuleData != nil {
-		ruleDataName = *ruleset.Spec.RuleData
+	if ruleset.Spec.RuleData != "" {
+		ruleDataName = ruleset.Spec.RuleData
 	}
 	if ruleDataName == "" {
 		return nil, false, nil
