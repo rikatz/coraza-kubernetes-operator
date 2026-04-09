@@ -75,7 +75,7 @@ spec:
                               image is the OCI image reference for the Coraza WASM plugin.
                               If omitted the operator uses its configured default WASM OCI reference
                               (--default-wasm-image / CORAZA_DEFAULT_WASM_IMAGE).
-                            maxLength: 4096
+                            maxLength: 1024
                             minLength: 1
                             type: string
                           imagePullSecret:

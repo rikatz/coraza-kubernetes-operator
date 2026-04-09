@@ -73,7 +73,7 @@ type IstioWasmConfig struct {
 	//
 	// +optional
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=4096
+	// +kubebuilder:validation:MaxLength=1024
 	Image string `json:"image,omitempty"`
 
 	// imagePullSecret is the name of a Kubernetes Secret in the same namespace
