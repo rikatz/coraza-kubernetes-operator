@@ -760,7 +760,7 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 				engine.Spec.Driver.Istio.Wasm.Image = "oci://" + string(make([]byte, 1100))
 				return engine
 			},
-			expectedError: fmt.Sprintf("image must be at most %d characters when set", wafv1alpha1.MaxImageLen),
+			expectedError: "Too long: may not be more than 1024 bytes",
 		},
 		{
 			name: "gateway mode without workloadSelector",
