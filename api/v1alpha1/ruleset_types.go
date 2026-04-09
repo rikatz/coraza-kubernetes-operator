@@ -113,6 +113,7 @@ type RuleSetSpec struct {
 	// of the file as the value
 	//
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MinLength=253
 	// +optional
 	RuleData *string `json:"ruleData,omitempty"`
 }
@@ -147,6 +148,7 @@ type RuleSourceReference struct {
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MinLength=253
 	Name string `json:"name,omitempty"`
 }
 
@@ -170,6 +172,7 @@ type RuleSetStatus struct {
 	// +listMapKey=type
 	// +patchStrategy=merge
 	// +patchMergeKey=type
+	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 }
