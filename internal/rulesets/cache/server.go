@@ -120,8 +120,10 @@ func NewServer(cache *RuleSetCache, addr string, logger logr.Logger, gc *Garbage
 	return s
 }
 
-// Start the cache server.
+// Start the cache server and the GC loop. Both are stopped when ctx is cancelled.
 func (s *ruleSetCacheServer) Start(ctx context.Context) error {
+	go s.rungc(ctx)
+
 	errChan := make(chan error, 1)
 	go func() {
 		s.logger.Info("Starting ruleset cache server", "addr", s.srv.Addr)
