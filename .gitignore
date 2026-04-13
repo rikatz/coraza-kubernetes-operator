@@ -46,6 +46,13 @@ dist/
 !RELEASE.md
 !LIMITATIONS.md
 
+# documentation site (Hugo)
+!docs/**/*.md
+!docs/**/*.html
+docs/public/
+docs/resources/
+docs/assets/icons/
+
 # templates
 !.github/*.md
 !.github/**/*.md

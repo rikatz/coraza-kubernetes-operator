@@ -461,6 +461,61 @@ helm.sync-rbac: manifests ## Sync generated RBAC rules into the Helm chart Clust
 helm.sync: helm.sync-crds helm.sync-rbac ## Sync all generated resources into the Helm chart
 
 # -------------------------------------------------------------------------------
+# Documentation
+# -------------------------------------------------------------------------------
+
+DOCS_DIR = docs
+DOCS_BASE_URL ?= https://networking-incubator.github.io/coraza-kubernetes-operator/
+DOCS_IMG = coraza-kubernetes-operator-docs
+DOCS_LOGO_SRC = logo/coraza_operator_icon.svg
+DOCS_LOGO_DST = $(DOCS_DIR)/assets/icons/logo.svg
+
+.PHONY: docs.image
+docs.image: ## Build the documentation container image
+	$(CONTAINER_TOOL) build -t $(DOCS_IMG) $(DOCS_DIR)
+
+.PHONY: docs.logo
+docs.logo: ## Copy project logo into docs assets for navbar rendering
+	@mkdir -p $(dir $(DOCS_LOGO_DST))
+	@cp $(DOCS_LOGO_SRC) $(DOCS_LOGO_DST)
+
+.PHONY: docs.serve
+docs.serve: docs.image docs.logo ## Serve documentation locally with live reload
+	$(CONTAINER_TOOL) run --rm -it -u $(shell id -u):$(shell id -g) \
+		-v $(CURDIR)/$(DOCS_DIR):/src -p 1313:1313 $(DOCS_IMG) \
+		hugo server --bind 0.0.0.0 --baseURL http://localhost:1313/ --buildDrafts --buildFuture
+
+.PHONY: docs.api
+docs.api: docs.image ## Generate CRD API reference from Go types
+	$(CONTAINER_TOOL) run --rm -u $(shell id -u):$(shell id -g) \
+		-e GOPATH=/tmp/go -e GOCACHE=/tmp/go-cache \
+		-v $(CURDIR):/repo -w /repo $(DOCS_IMG) \
+		crd-ref-docs \
+			--source-path=api \
+			--config=hack/crd-ref-templates/config.yaml \
+			--templates-dir=hack/crd-ref-templates \
+			--renderer=markdown \
+			--output-path=$(DOCS_DIR)/content/reference/api.md
+
+.PHONY: docs.build
+docs.build: docs.image docs.api docs.logo ## Build documentation for production
+	$(CONTAINER_TOOL) run --rm \
+		-v $(CURDIR)/$(DOCS_DIR):/src $(DOCS_IMG) \
+		sh -c 'hugo --minify --baseURL "$(DOCS_BASE_URL)" && chown -R $(shell id -u):$(shell id -g) /src/public'
+
+CHROMA_LIGHT_STYLE ?= tango
+CHROMA_DARK_STYLE  ?= dracula
+
+.PHONY: docs.chroma
+docs.chroma: ## Regenerate Chroma syntax highlighting CSS for light and dark modes
+	hugo gen chromastyles --style=$(CHROMA_LIGHT_STYLE) > $(DOCS_DIR)/assets/scss/_chroma_light.css
+	hugo gen chromastyles --style=$(CHROMA_DARK_STYLE)  > $(DOCS_DIR)/assets/scss/_chroma_dark.css
+	@echo "Generated light ($(CHROMA_LIGHT_STYLE)) and dark ($(CHROMA_DARK_STYLE)) Chroma stylesheets."
+	@echo "Copy the rules into $(DOCS_DIR)/assets/scss/_styles_project.scss:"
+	@echo "  - Light: top-level (replace 'Light mode syntax highlighting' section)"
+	@echo "  - Dark: inside [data-bs-theme=\"dark\"] (replace 'Dark mode syntax highlighting' section)"
+
+# -------------------------------------------------------------------------------
 # Dependencies
 # -------------------------------------------------------------------------------
 
