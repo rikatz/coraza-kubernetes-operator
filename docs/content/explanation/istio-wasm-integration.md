@@ -53,8 +53,8 @@ The Engine controller lists all Gateways in the same namespace and reports the m
 
 The WASM plugin running inside Envoy polls the operator's cache server at the interval specified by `pollIntervalSeconds` (default: 15 seconds). The polling flow is:
 
-1. The plugin sends `GET /rules/{namespace/name}/latest` to check the current version.
-2. If the version has changed since the last fetch, the plugin sends `GET /rules/{namespace/name}/data` to download the new rules.
+1. The plugin sends `GET /rules/{namespace/name}/latest` to check the current UUID.
+2. If the UUID has changed since the last fetch, the plugin sends `GET /rules/{namespace/name}` to download the new rules.
 3. The plugin loads the new rules and begins enforcing them on subsequent requests.
 
 This design allows rule updates without restarting Envoy or the Gateway pods.

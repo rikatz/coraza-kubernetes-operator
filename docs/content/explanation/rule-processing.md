@@ -51,7 +51,7 @@ This behavior can be overridden with the annotation `waf.k8s.coraza.io/skip-unsu
 
 When rules are successfully compiled and validated, the result is stored in the in-memory RuleSet cache. The cache uses the RuleSet's `namespace/name` as the key.
 
-Cache entries have a version number that increments with each successful compilation. WASM plugins poll the `/rules/{key}/latest` endpoint to check for new versions, and fetch the full ruleset from `/rules/{key}/data` when a new version is detected.
+Each cache entry is identified by a UUID that changes with each successful compilation. WASM plugins poll the `/rules/{key}/latest` endpoint to check for a new UUID, and fetch the full ruleset from `/rules/{key}` when a change is detected.
 
 Entries are evicted by the garbage collector based on age and total cache size. See [Architecture]({{< relref "architecture" >}}) for the cache configuration parameters.
 

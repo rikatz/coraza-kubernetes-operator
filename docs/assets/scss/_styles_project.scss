@@ -180,7 +180,7 @@ html {
 // ------------------------------------------------------------------
 // Light mode syntax highlighting (Chroma "tango")
 // Generated with: hugo gen chromastyles --style=tango
-// Regenerate with: make -C docs chroma
+// Regenerate with: make docs.chroma
 // ------------------------------------------------------------------
 .bg { background-color: #f8f8f8; }
 .chroma { background-color: #f8f8f8; }
@@ -399,7 +399,7 @@ footer.td-footer {
   // ------------------------------------------------------------------
   // Dark mode syntax highlighting (Chroma "dracula")
   // Generated with: hugo gen chromastyles --style=dracula
-  // Regenerate with: make -C docs chroma
+  // Regenerate with: make docs.chroma
   // ------------------------------------------------------------------
   .bg { color: #f8f8f2; background-color: #282a36; }
   .chroma { color: #f8f8f2; background-color: #282a36; }

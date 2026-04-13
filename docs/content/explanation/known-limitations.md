@@ -133,6 +133,6 @@ These require further analysis:
 
 | Component | Version |
 |-----------|---------|
-| Coraza | v3.6.0 |
+| Coraza | v3.7.0 |
 | CoreRuleSet | v4.24.1 |
 | Execution Environment | Envoy/Istio WASM filter |

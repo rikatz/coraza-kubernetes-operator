@@ -61,8 +61,8 @@ The cache is an in-memory, versioned HTTP server that runs within the operator p
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /rules/{namespace/name}/data` | Returns the full compiled ruleset. |
-| `GET /rules/{namespace/name}/latest` | Returns metadata about the latest cached version. |
+| `GET /rules/{namespace/name}` | Returns the full compiled ruleset as a JSON `RuleSetEntry`. |
+| `GET /rules/{namespace/name}/latest` | Returns metadata (UUID and timestamp) about the latest cached version. |
 
 The cache keys are the `namespace/name` of the RuleSet resource. Cache entries are garbage-collected based on:
 

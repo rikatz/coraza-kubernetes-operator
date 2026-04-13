@@ -45,10 +45,8 @@ The Coraza Kubernetes Operator Helm chart is located at `charts/coraza-kubernete
 
 | Platform | Minimum Version |
 |----------|----------------|
-| Kubernetes | v1.33+ |
+| Kubernetes | v1.32+ |
 | OpenShift Container Platform | v4.20+ |
-
-The chart requires Kubernetes v1.33+ due to the use of the `resizePolicy` API.
 
 ## OpenShift Values Example
 
