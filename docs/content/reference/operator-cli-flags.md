@@ -33,9 +33,9 @@ The operator manager binary accepts the following command-line flags. When deplo
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--cache-gc-interval` | `10m` | How often to check for and remove stale cache entries. |
+| `--cache-gc-interval` | `5m` | How often to check for and remove stale cache entries. |
 | `--cache-max-age` | `24h` | Maximum age before a cache entry is considered stale. |
-| `--cache-max-size` | `536870912` (512 MB) | Maximum total size of all cached rules in bytes. |
+| `--cache-max-size` | `104857600` (100 MB) | Maximum total size of all cached rules in bytes. |
 | `--cache-server-port` | `18080` | Port for the RuleSet cache HTTP server. |
 | `--envoy-cluster-name` | (required) | Envoy cluster name pointing to the cache server. |
 

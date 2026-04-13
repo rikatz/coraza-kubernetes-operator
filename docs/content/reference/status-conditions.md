@@ -43,8 +43,13 @@ The Engine could not reach its desired state. Common reasons:
 
 | Reason | Description | Resolution |
 |--------|-------------|------------|
-| RuleSet not ready | The referenced RuleSet is not in a Ready state. | Check the RuleSet status: `kubectl describe ruleset <name>`. |
-| No matching Gateways | The workload selector does not match any Gateway pods. | Verify the labels on your Gateway pods match the `workloadSelector`. |
+| `RuleSetNotFound` | The referenced RuleSet does not exist. | Verify the RuleSet name and namespace in the Engine spec. |
+| `RuleSetDegraded` | The referenced RuleSet is in a Degraded state. | Check the RuleSet status: `kubectl describe ruleset <name>`. |
+| `InvalidConfiguration` | The Engine spec contains an invalid configuration. | Check the condition message for details and fix the Engine spec. |
+| `ProvisioningFailed` | Failed to create or update the WasmPlugin resource. | Check operator logs and RBAC permissions. |
+| `NetworkPolicyFailed` | Failed to apply the NetworkPolicy for the cache server. | Check operator logs and RBAC permissions. |
+| `ServiceAccountFailed` | Failed to ensure the cache client ServiceAccount. | Check operator logs and RBAC permissions. |
+| `TokenFailed` | Failed to ensure the cache client token. | Check operator logs and RBAC permissions. |
 
 ## RuleSet Conditions
 
@@ -67,6 +72,9 @@ The RuleSet could not be compiled or cached. Common reasons:
 | `ConfigMapNotFound` | A referenced ConfigMap does not exist. | Verify the ConfigMap name and namespace. |
 | `ConfigMapAccessError` | The operator could not read a referenced ConfigMap. | Check RBAC permissions for the operator ServiceAccount. |
 | `InvalidConfigMap` | A referenced ConfigMap is missing the `rules` key. | Ensure each ConfigMap has a `rules` key containing SecLang directives. |
+| `SecretNotFound` | A referenced Secret does not exist. | Verify the Secret name and namespace. |
+| `SecretAccessError` | The operator could not read a referenced Secret. | Check RBAC permissions for the operator ServiceAccount. |
+| `RuleDataSecretTypeMismatch` | A referenced Secret has an unexpected type. | Ensure the Secret type matches what the RuleSet expects. |
 
 ## Troubleshooting
 

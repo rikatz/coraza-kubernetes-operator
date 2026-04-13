@@ -67,8 +67,8 @@ The cache is an in-memory, versioned HTTP server that runs within the operator p
 The cache keys are the `namespace/name` of the RuleSet resource. Cache entries are garbage-collected based on:
 
 - **Maximum age** (`--cache-max-age`, default 24 hours) -- entries older than this are removed.
-- **Maximum size** (`--cache-max-size`, default 512 MB) -- when the total cache size exceeds this, the oldest entries are evicted.
-- **GC interval** (`--cache-gc-interval`, default 10 minutes) -- how often the garbage collector runs.
+- **Maximum size** (`--cache-max-size`, default 100 MB) -- when the total cache size exceeds this, the oldest entries are evicted.
+- **GC interval** (`--cache-gc-interval`, default 5 minutes) -- how often the garbage collector runs.
 
 ## Istio Prerequisites
 
