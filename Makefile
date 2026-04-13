@@ -482,25 +482,25 @@ docs.logo: ## Copy project logo into docs assets for navbar rendering
 .PHONY: docs.serve
 docs.serve: docs.image docs.logo ## Serve documentation locally with live reload
 	$(CONTAINER_TOOL) run --rm -it -u $(shell id -u):$(shell id -g) \
-		-v $(CURDIR)/$(DOCS_DIR):/src -p 1313:1313 $(DOCS_IMG) \
+		-v $(CURDIR)/$(DOCS_DIR):/src:z -p 1313:1313 $(DOCS_IMG) \
 		hugo server --bind 0.0.0.0 --baseURL http://localhost:1313/ --buildDrafts --buildFuture
 
 .PHONY: docs.api
 docs.api: docs.image ## Generate CRD API reference from Go types
-	$(CONTAINER_TOOL) run --rm -u $(shell id -u):$(shell id -g) \
-		-e GOPATH=/tmp/go -e GOCACHE=/tmp/go-cache \
-		-v $(CURDIR):/repo -w /repo $(DOCS_IMG) \
-		crd-ref-docs \
+	$(CONTAINER_TOOL) run --rm \
+		-v $(CURDIR):/repo:z -w /repo $(DOCS_IMG) \
+		sh -c 'crd-ref-docs \
 			--source-path=api \
 			--config=hack/crd-ref-templates/config.yaml \
 			--templates-dir=hack/crd-ref-templates \
 			--renderer=markdown \
-			--output-path=$(DOCS_DIR)/content/reference/api.md
+			--output-path=$(DOCS_DIR)/content/reference/api.md \
+		&& chown $(shell id -u):$(shell id -g) $(DOCS_DIR)/content/reference/api.md'
 
 .PHONY: docs.build
 docs.build: docs.image docs.api docs.logo ## Build documentation for production
 	$(CONTAINER_TOOL) run --rm \
-		-v $(CURDIR)/$(DOCS_DIR):/src $(DOCS_IMG) \
+		-v $(CURDIR)/$(DOCS_DIR):/src:z $(DOCS_IMG) \
 		sh -c 'hugo --minify --baseURL "$(DOCS_BASE_URL)" && chown -R $(shell id -u):$(shell id -g) /src/public'
 
 CHROMA_LIGHT_STYLE ?= tango
