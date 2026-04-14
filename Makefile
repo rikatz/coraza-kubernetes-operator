@@ -467,20 +467,13 @@ helm.sync: helm.sync-crds helm.sync-rbac ## Sync all generated resources into th
 DOCS_DIR = docs
 DOCS_BASE_URL ?= https://networking-incubator.github.io/coraza-kubernetes-operator/
 DOCS_IMG = coraza-kubernetes-operator-docs
-DOCS_LOGO_SRC = logo/coraza_operator_icon.svg
-DOCS_LOGO_DST = $(DOCS_DIR)/assets/icons/logo.svg
 
 .PHONY: docs.image
 docs.image: ## Build the documentation container image
 	$(CONTAINER_TOOL) build -t $(DOCS_IMG) $(DOCS_DIR)
 
-.PHONY: docs.logo
-docs.logo: ## Copy project logo into docs assets for navbar rendering
-	@mkdir -p $(dir $(DOCS_LOGO_DST))
-	@cp $(DOCS_LOGO_SRC) $(DOCS_LOGO_DST)
-
 .PHONY: docs.serve
-docs.serve: docs.image docs.logo ## Serve documentation locally with live reload
+docs.serve: docs.image ## Serve documentation locally with live reload
 	$(CONTAINER_TOOL) run --rm -it \
 		-v $(CURDIR)/$(DOCS_DIR):/src:z -p 1313:1313 $(DOCS_IMG) \
 		hugo server --bind 0.0.0.0 --baseURL http://localhost:1313/ --buildDrafts --buildFuture
@@ -498,7 +491,7 @@ docs.api: docs.image ## Generate CRD API reference from Go types
 		&& chown $(shell id -u):$(shell id -g) $(DOCS_DIR)/content/reference/api.md'
 
 .PHONY: docs.build
-docs.build: docs.image docs.api docs.logo ## Build documentation for production
+docs.build: docs.image docs.api ## Build documentation for production
 	$(CONTAINER_TOOL) run --rm \
 		-v $(CURDIR)/$(DOCS_DIR):/src:z $(DOCS_IMG) \
 		sh -c 'hugo --minify --baseURL "$(DOCS_BASE_URL)" && chown -R $(shell id -u):$(shell id -g) /src/public'

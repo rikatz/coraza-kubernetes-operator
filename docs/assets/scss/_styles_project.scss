@@ -18,14 +18,19 @@ html {
   background: #fff;
   border-bottom: 1px solid #e5e7eb;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
 
   .navbar-brand {
     color: #1a2b4a;
+    margin-right: 1.5rem;
+  }
 
-    svg,
-    img {
-      height: 32px;
-      margin-right: 0.5rem;
+  .navbar-toggler {
+    border-color: rgba(0, 0, 0, 0.15);
+
+    &:focus {
+      box-shadow: 0 0 0 0.2rem rgba(50, 108, 229, 0.25);
     }
   }
 
@@ -266,7 +271,7 @@ html {
 .chroma .gu { color: #800080; font-weight: bold; }
 .chroma .gt { color: #a40000; font-weight: bold; }
 .chroma .gl { color: #000; text-decoration: underline; }
-.chroma .w { color: #f8f8f8; text-decoration: underline; }
+.chroma .w { color: #f8f8f8; }
 
 // ------------------------------------------------------------------
 // Left sidebar
@@ -311,6 +316,14 @@ footer.td-footer {
 
     .navbar-brand {
       color: #e5e7eb;
+    }
+
+    .navbar-toggler {
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .navbar-toggler-icon {
+      filter: invert(1);
     }
 
     .nav-link {

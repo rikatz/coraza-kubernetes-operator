@@ -3,6 +3,8 @@ title: "Explanation"
 linkTitle: "Explanation"
 weight: 40
 type: docs
+cascade:
+  type: docs
 description: "Background knowledge and design decisions behind the Coraza Kubernetes Operator."
 ---
 

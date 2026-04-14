@@ -3,6 +3,8 @@ title: "Reference"
 linkTitle: "Reference"
 weight: 30
 type: docs
+cascade:
+  type: docs
 description: "Detailed API and configuration reference for the Coraza Kubernetes Operator."
 ---
 

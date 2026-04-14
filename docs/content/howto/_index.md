@@ -3,6 +3,8 @@ title: "How-to Guides"
 linkTitle: "How-to Guides"
 weight: 20
 type: docs
+cascade:
+  type: docs
 description: "Task-oriented guides for common operations with the Coraza Kubernetes Operator."
 ---
 

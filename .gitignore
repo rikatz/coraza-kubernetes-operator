@@ -51,7 +51,6 @@ dist/
 !docs/**/*.html
 docs/public/
 docs/resources/
-docs/assets/icons/
 
 # templates
 !.github/*.md

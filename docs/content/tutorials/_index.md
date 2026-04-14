@@ -3,6 +3,8 @@ title: "Tutorials"
 linkTitle: "Tutorials"
 weight: 10
 type: docs
+cascade:
+  type: docs
 description: "Step-by-step lessons to get started with the Coraza Kubernetes Operator."
 ---
 
