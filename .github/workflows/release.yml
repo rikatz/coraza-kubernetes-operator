@@ -246,6 +246,11 @@ jobs:
   # Redeploy GitHub Pages so the Helm repo index picks up the newly published
   # chart .tgz from this release. pages.yml downloads all chart assets from
   # GitHub releases and regenerates index.yaml on every run.
+  #
+  # NOTE: publish-release creates a draft. pages.yml excludes drafts (their
+  # assets aren't publicly downloadable), so this run won't include the new
+  # chart yet. The index updates once the release is manually published —
+  # any push to main or manual workflow_dispatch will pick it up.
   trigger-pages:
     name: trigger pages deployment
     runs-on: ubuntu-latest

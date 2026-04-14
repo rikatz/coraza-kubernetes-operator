@@ -30,18 +30,28 @@ jobs:
       - name: install chart-releaser
         run: |
           CR_VERSION="1.7.0"
-          curl -sSLo cr.tar.gz "https://github.com/helm/chart-releaser/releases/download/v${CR_VERSION}/chart-releaser_${CR_VERSION}_linux_amd64.tar.gz"
-          tar -xzf cr.tar.gz cr
+          CR_ARCHIVE="chart-releaser_${CR_VERSION}_linux_amd64.tar.gz"
+          CR_BASE_URL="https://github.com/helm/chart-releaser/releases/download/v${CR_VERSION}"
+          curl -fsSLo "${CR_ARCHIVE}" "${CR_BASE_URL}/${CR_ARCHIVE}"
+          curl -fsSLo checksums.txt "${CR_BASE_URL}/checksums.txt"
+          grep "  ${CR_ARCHIVE}$" checksums.txt | sha256sum -c -
+          tar -xzf "${CR_ARCHIVE}" cr
           mv cr /usr/local/bin/cr
-          rm cr.tar.gz
+          rm "${CR_ARCHIVE}" checksums.txt
 
       # cr index does NOT enumerate GitHub releases on its own — it requires local
       # .tgz packages to know which chart versions exist, then looks up the matching
       # GitHub release for each one to extract download URLs.
+      # Drafts are excluded because their assets are not publicly downloadable,
+      # which would produce broken URLs in index.yaml. The index updates once
+      # the release is published and pages.yml is triggered again (push to main
+      # or manual dispatch). Uses paginated API to avoid missing releases when
+      # the repo has more than 100.
       - name: download chart packages from releases
         run: |
           mkdir -p .cr-release-packages
-          gh release list --limit 100 --json tagName --jq '.[].tagName' | while read -r tag; do
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq '.[] | select(.draft == false) | .tag_name' | while read -r tag; do
             gh release download "$tag" --pattern '*.tgz' --dir .cr-release-packages --skip-existing 2>/dev/null || true
           done
           echo "Downloaded chart packages:"
