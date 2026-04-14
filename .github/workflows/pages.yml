@@ -29,15 +29,19 @@ jobs:
       # and push index.yaml to a git branch, neither of which we want here.
       - name: install chart-releaser
         run: |
+          set -o pipefail
           CR_VERSION="1.7.0"
           CR_ARCHIVE="chart-releaser_${CR_VERSION}_linux_amd64.tar.gz"
           CR_BASE_URL="https://github.com/helm/chart-releaser/releases/download/v${CR_VERSION}"
           curl -fsSLo "${CR_ARCHIVE}" "${CR_BASE_URL}/${CR_ARCHIVE}"
           curl -fsSLo checksums.txt "${CR_BASE_URL}/checksums.txt"
+          grep -q "  ${CR_ARCHIVE}$" checksums.txt || { echo "::error::checksum entry not found for ${CR_ARCHIVE}"; exit 1; }
           grep "  ${CR_ARCHIVE}$" checksums.txt | sha256sum -c -
           tar -xzf "${CR_ARCHIVE}" cr
-          mv cr /usr/local/bin/cr
-          rm "${CR_ARCHIVE}" checksums.txt
+          install -d "${RUNNER_TEMP}/cr-bin"
+          install cr "${RUNNER_TEMP}/cr-bin/cr"
+          echo "${RUNNER_TEMP}/cr-bin" >> "${GITHUB_PATH}"
+          rm "${CR_ARCHIVE}" checksums.txt cr
 
       # cr index does NOT enumerate GitHub releases on its own — it requires local
       # .tgz packages to know which chart versions exist, then looks up the matching
@@ -49,11 +53,24 @@ jobs:
       # the repo has more than 100.
       - name: download chart packages from releases
         run: |
+          set -euo pipefail
           mkdir -p .cr-release-packages
           gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
-            --jq '.[] | select(.draft == false) | .tag_name' | while read -r tag; do
-            gh release download "$tag" --pattern '*.tgz' --dir .cr-release-packages --skip-existing 2>/dev/null || true
-          done
+            --jq '.[] | select(.draft == false) | .tag_name' > /tmp/release-tags.txt
+          while read -r tag; do
+            # Exit code 1 with "no assets" is expected for releases without
+            # a chart .tgz (e.g. early releases). Real errors (auth, network)
+            # produce different exit codes or messages and must not be masked.
+            if ! gh release download "$tag" --pattern '*.tgz' --dir .cr-release-packages --skip-existing 2>/tmp/dl-err.txt; then
+              if grep -q "no assets match" /tmp/dl-err.txt 2>/dev/null; then
+                echo "No chart package in release ${tag}, skipping."
+              else
+                echo "::error::Failed to download from release ${tag}:"
+                cat /tmp/dl-err.txt
+                exit 1
+              fi
+            fi
+          done < /tmp/release-tags.txt
           echo "Downloaded chart packages:"
           ls -la .cr-release-packages/ || echo "  (none — first deployment)"
         env:
