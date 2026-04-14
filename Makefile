@@ -481,7 +481,7 @@ docs.logo: ## Copy project logo into docs assets for navbar rendering
 
 .PHONY: docs.serve
 docs.serve: docs.image docs.logo ## Serve documentation locally with live reload
-	$(CONTAINER_TOOL) run --rm -it -u $(shell id -u):$(shell id -g) \
+	$(CONTAINER_TOOL) run --rm -it \
 		-v $(CURDIR)/$(DOCS_DIR):/src:z -p 1313:1313 $(DOCS_IMG) \
 		hugo server --bind 0.0.0.0 --baseURL http://localhost:1313/ --buildDrafts --buildFuture
 
@@ -507,13 +507,16 @@ CHROMA_LIGHT_STYLE ?= tango
 CHROMA_DARK_STYLE  ?= dracula
 
 .PHONY: docs.chroma
-docs.chroma: ## Regenerate Chroma syntax highlighting CSS for light and dark modes
-	hugo gen chromastyles --style=$(CHROMA_LIGHT_STYLE) > $(DOCS_DIR)/assets/scss/_chroma_light.css
-	hugo gen chromastyles --style=$(CHROMA_DARK_STYLE)  > $(DOCS_DIR)/assets/scss/_chroma_dark.css
+docs.chroma: docs.image ## Regenerate Chroma syntax highlighting CSS for light and dark modes
+	$(CONTAINER_TOOL) run --rm -v $(CURDIR)/$(DOCS_DIR):/src:z $(DOCS_IMG) \
+		sh -c 'hugo gen chromastyles --style=$(CHROMA_LIGHT_STYLE) > /src/assets/scss/_chroma_light.css \
+		&& hugo gen chromastyles --style=$(CHROMA_DARK_STYLE) > /src/assets/scss/_chroma_dark.css \
+		&& chown $(shell id -u):$(shell id -g) /src/assets/scss/_chroma_light.css /src/assets/scss/_chroma_dark.css'
 	@echo "Generated light ($(CHROMA_LIGHT_STYLE)) and dark ($(CHROMA_DARK_STYLE)) Chroma stylesheets."
 	@echo "Copy the rules into $(DOCS_DIR)/assets/scss/_styles_project.scss:"
 	@echo "  - Light: top-level (replace 'Light mode syntax highlighting' section)"
 	@echo "  - Dark: inside [data-bs-theme=\"dark\"] (replace 'Dark mode syntax highlighting' section)"
+	@rm -f $(DOCS_DIR)/assets/scss/_chroma_light.css $(DOCS_DIR)/assets/scss/_chroma_dark.css
 
 # -------------------------------------------------------------------------------
 # Dependencies

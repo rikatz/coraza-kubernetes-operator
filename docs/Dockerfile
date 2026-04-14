@@ -4,8 +4,8 @@ FROM hugomods/hugo:exts@sha256:dcbc5b53c4e53bb74a7c986caf58a3954395a1e9d8dc9bb49
 # don't shadow them. Versions are declared in package.json and tracked
 # by Dependabot.
 WORKDIR /deps
-COPY package.json ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 ENV NODE_PATH=/deps/node_modules
 
 # Pre-fetch Hugo modules for faster builds.
