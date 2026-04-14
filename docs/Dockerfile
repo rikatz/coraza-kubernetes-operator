@@ -7,6 +7,7 @@ WORKDIR /deps
 COPY package.json package-lock.json ./
 RUN npm ci
 ENV NODE_PATH=/deps/node_modules
+ENV PATH="/deps/node_modules/.bin:${PATH}"
 
 # Pre-fetch Hugo modules for faster builds.
 WORKDIR /src

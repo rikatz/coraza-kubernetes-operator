@@ -45,6 +45,8 @@ All RuleSets, ConfigMaps, Secrets, and Engines must reside in the same namespace
 
 The metrics endpoint is served over HTTPS with TLS 1.3 on port 8443. HTTP/2 is explicitly disabled to mitigate CVE-2023-44487 (HTTP/2 Rapid Reset attack). The TLS configuration enforces `NextProtos: []string{"http/1.1"}`.
 
+The endpoint requires authentication and authorization via Kubernetes RBAC. Clients (such as Prometheus) must present a valid ServiceAccount token, and the ServiceAccount must be granted the `get` verb on the `/metrics` nonResourceURL. See [Monitoring with Prometheus]({{< relref "../howto/monitoring-prometheus#configuring-prometheus-rbac" >}}) for the required ClusterRole and ClusterRoleBinding.
+
 By default, the operator generates a self-signed certificate. Users can provide their own certificate via the `metrics.certSecret` Helm value.
 
 ### Cache Server
