@@ -5,11 +5,11 @@ permissions: read-all
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+  workflow_dispatch: # called by release.yml after a new chart is published
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: false # never cancel a pages deployment mid-flight
 
 jobs:
   build:
@@ -24,6 +24,9 @@ jobs:
       - name: build docs
         run: make docs.build
 
+      # chart-releaser (cr) CLI is used instead of helm/chart-releaser-action because
+      # the action has no "index-only" mode — it always tries to upload chart packages
+      # and push index.yaml to a git branch, neither of which we want here.
       - name: install chart-releaser
         run: |
           CR_VERSION="1.7.0"
@@ -32,14 +35,37 @@ jobs:
           mv cr /usr/local/bin/cr
           rm cr.tar.gz
 
+      # cr index does NOT enumerate GitHub releases on its own — it requires local
+      # .tgz packages to know which chart versions exist, then looks up the matching
+      # GitHub release for each one to extract download URLs.
+      - name: download chart packages from releases
+        run: |
+          mkdir -p .cr-release-packages
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | while read -r tag; do
+            gh release download "$tag" --pattern '*.tgz' --dir .cr-release-packages --skip-existing 2>/dev/null || true
+          done
+          echo "Downloaded chart packages:"
+          ls -la .cr-release-packages/ || echo "  (none — first deployment)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # cr index reads each local .tgz, extracts chart metadata, and looks up the
+      # matching GitHub release by tag to get asset download URLs for index.yaml.
+      #
+      # --release-name-template is required because our releases use "v0.1.0" tags,
+      # but the default template is "{{ .Name }}-{{ .Version }}" which would look for
+      # "coraza-kubernetes-operator-0.1.0" — a tag that does not exist.
+      #
+      # --charts-repo is intentionally omitted: it is deprecated in cr and has no
+      # effect. The index URLs always come from the GitHub release asset's
+      # BrowserDownloadURL, pointing users directly to GitHub Releases for downloads.
       - name: generate helm repo index
         run: |
-          OWNER="${GITHUB_REPOSITORY_OWNER}"
-          REPO="${GITHUB_REPOSITORY#*/}"
           cr index \
-            --owner "$OWNER" \
-            --git-repo "$REPO" \
-            --charts-repo "https://${OWNER}.github.io/${REPO}" \
+            --owner "${{ github.repository_owner }}" \
+            --git-repo "${GITHUB_REPOSITORY#*/}" \
+            --release-name-template "v{{ .Version }}" \
+            --package-path .cr-release-packages \
             --index-path docs/public/index.yaml
         env:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -56,6 +82,9 @@ jobs:
     name: deploy to github pages
     runs-on: ubuntu-latest
     needs: build
+    # id-token: write is required for OIDC-based authentication with GitHub Pages.
+    # pages: write allows the deployment. These are set at job level (not workflow
+    # level) so the build job runs with read-only permissions.
     permissions:
       pages: write
       id-token: write

@@ -227,6 +227,9 @@ jobs:
           generate_release_notes: true
           draft: true # IMPORTANT: our releases are immutable, so a maintainer needs to validate and do the final publish
           prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          # The chart .tgz is included here (not in a separate chart-releaser step)
+          # so that pages.yml can generate the Helm repo index directly from release
+          # assets using `cr index`, without needing a dedicated gh-pages branch.
           files: |
             dist/crds.yaml
             dist/operator.yaml
@@ -240,6 +243,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Redeploy GitHub Pages so the Helm repo index picks up the newly published
+  # chart .tgz from this release. pages.yml downloads all chart assets from
+  # GitHub releases and regenerates index.yaml on every run.
   trigger-pages:
     name: trigger pages deployment
     runs-on: ubuntu-latest
