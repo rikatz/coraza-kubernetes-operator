@@ -32,7 +32,12 @@ helm repo update
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
+  --create-namespace
 ```
+
+{{% alert title="Namespace conflict on versions 0.4.0 and earlier" color="warning" %}}
+Versions 0.4.0 and earlier have a bug where the first install fails with `namespaces "coraza-system" already exists`. If you hit this error, run the same command again. The first run creates the namespace and a failed release record; the second run succeeds because Helm treats it as an upgrade, which patches the existing namespace instead of trying to create it.
+{{% /alert %}}
 
 For more installation options (version pinning, custom values), see the [Install on Kubernetes with Helm]({{< relref "../howto/install-kubernetes-helm" >}}) how-to guide.
 
@@ -242,6 +247,14 @@ curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/?q=attack"
 Expected output: `403`
 
 The WAF is working. Requests containing the word "attack" in any query parameter are blocked with a 403 status.
+
+Check the Gateway logs to see the blocked request:
+
+```bash
+kubectl logs -n waf-tutorial deploy/waf-gateway-istio
+```
+
+You should see a log entry from Coraza indicating the request was denied.
 
 ## Step 8: Clean Up
 

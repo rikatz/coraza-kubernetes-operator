@@ -89,10 +89,15 @@ helm repo update
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
+  --create-namespace \
   --set openshift.enabled=true \
   --set istio.revision=openshift-gateway \
   --set metrics.serviceMonitor.enabled=true
 ```
+
+{{% alert title="Namespace conflict on versions 0.4.0 and earlier" color="warning" %}}
+Versions 0.4.0 and earlier have a bug where the first install fails with `namespaces "coraza-system" already exists`. If you hit this error, run the same command again. The first run creates the namespace and a failed release record; the second run succeeds because Helm treats it as an upgrade, which patches the existing namespace instead of trying to create it.
+{{% /alert %}}
 
 ### Pin a Specific Version
 
@@ -121,6 +126,7 @@ metrics:
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
+  --create-namespace \
   -f openshift-values.yaml
 ```
 

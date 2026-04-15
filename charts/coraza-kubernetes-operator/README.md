@@ -15,7 +15,8 @@ After a version tag is pushed, CI publishes the packaged chart to the GitHub rel
 helm repo add coraza-kubernetes-operator https://networking-incubator.github.io/coraza-kubernetes-operator/
 helm repo update
 helm upgrade --install coraza-kubernetes-operator coraza-kubernetes-operator/coraza-kubernetes-operator \
-  --namespace coraza-system
+  --namespace coraza-system \
+  --create-namespace
 ```
 
 Forks and other remotes use their own Pages URL: `https://<owner>.github.io/<repository>/`.
@@ -67,7 +68,7 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 | `logging.timeEncoding`                                | string | `rfc3339nano`                                             | Timestamp format (`epoch`, `millis`, `nano`, `iso8601`, `rfc3339`, `rfc3339nano`). Only used when `development=false` |
 | `istio.revision`                                      | string | `""`                                                      | Istio control plane revision label; empty means no revision label on managed resources                      |
 | `defaultWasmImage`                                    | string | `""`                                                      | Default WASM plugin OCI URL when an Engine omits `spec.driver.istio.wasm.image`; empty uses operator built-in default |
-| `createNamespace`                                     | bool   | `true`                                                    | Create the release namespace as a chart-managed resource with PSS labels                                    |
+| `createNamespace`                                     | bool   | `true`                                                    | Manage the release namespace with Pod Security Standard labels. Requires `--create-namespace` on first install |
 | `openshift.enabled`                                   | bool   | `false`                                                   | Omit UID/fsGroup from pod security context for OpenShift SCC compatibility                                  |
 | `podSecurityStandard.version`                         | string | `latest`                                                  | Kubernetes version for Pod Security Standard labels (`latest` or `vX.YZ`)                                    |
 | **Kubernetes version**                                | string | `1.32+`                                                   | Minimum cluster version required by this chart                                                              |

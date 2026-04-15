@@ -1,4 +1,11 @@
 {{- if .Values.createNamespace }}
+{{- /* On fresh install with --create-namespace, Helm creates a bare namespace before  */}}
+{{- /* applying chart resources. Because install uses create semantics, including a    */}}
+{{- /* Namespace resource here would fail with "already exists". We skip the resource  */}}
+{{- /* on install when the namespace already exists (detected via lookup) and apply the */}}
+{{- /* Pod Security Standard labels on the first upgrade, where Helm uses three-way    */}}
+{{- /* merge. helm template (no cluster) always renders because lookup returns empty.  */}}
+{{- if or .Release.IsUpgrade (not (lookup "v1" "Namespace" "" .Release.Namespace)) }}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -11,4 +18,5 @@ metadata:
     pod-security.kubernetes.io/warn-version: {{ .Values.podSecurityStandard.version }}
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/audit-version: {{ .Values.podSecurityStandard.version }}
+{{- end }}
 {{- end }}

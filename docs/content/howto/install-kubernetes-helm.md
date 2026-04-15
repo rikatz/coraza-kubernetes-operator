@@ -26,7 +26,8 @@ helm repo update
 ```bash
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
-  --namespace coraza-system
+  --namespace coraza-system \
+  --create-namespace
 ```
 
 ### Pin a Specific Version
@@ -35,10 +36,15 @@ helm upgrade --install coraza-kubernetes-operator \
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
+  --create-namespace \
   --version <chart-version>
 ```
 
 Replace `<chart-version>` with the desired version (e.g. `0.1.0`). Available versions are listed on the [releases page](https://github.com/networking-incubator/coraza-kubernetes-operator/releases).
+
+{{% alert title="Namespace conflict on versions 0.4.0 and earlier" color="warning" %}}
+Versions 0.4.0 and earlier have a bug where the first install fails with `namespaces "coraza-system" already exists`. If you hit this error, run the same command again. The first run creates the namespace and a failed release record; the second run succeeds because Helm treats it as an upgrade, which patches the existing namespace instead of trying to create it.
+{{% /alert %}}
 
 ## Customize the Installation
 
@@ -48,6 +54,7 @@ Override default values by passing individual settings:
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
+  --create-namespace \
   --set logging.level=debug \
   --set metrics.serviceMonitor.enabled=true
 ```
@@ -77,6 +84,7 @@ resources:
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
+  --create-namespace \
   -f custom-values.yaml
 ```
 
