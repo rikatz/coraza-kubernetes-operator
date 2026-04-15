@@ -190,7 +190,13 @@ announcements get unpinned.
 
 [immutable releases]:https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases
 
-### Step 6 - OperatorHub
+### Step 6 - Github pages
+
+Trigger the [github pages](https://github.com/networking-incubator/coraza-kubernetes-operator/actions/workflows/pages.yml) workflow
+manually to re-publish the Helm chart index, containing the released version or using the CLI
+command `gh workflow run pages.yml`.
+
+### Step 7 - OperatorHub
 
 The [`operatorhub.yml`] workflow is **disabled** (`if: false` on the job) until
 a dedicated bot or service account can hold the PAT and related settings for
