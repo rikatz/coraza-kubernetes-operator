@@ -16,7 +16,7 @@ This guide covers installing the Coraza Kubernetes Operator on OpenShift Contain
 
 ### Enable Gateway API
 
-On OpenShift 4.19 and later, the Gateway API CRDs are included by default. You must create the `openshift-default` GatewayClass, which is the [officially supported GatewayClass](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/ingress_and_load_balancing/configuring-ingress-cluster-traffic#ingress-gateway-api) provided by the OpenShift Ingress Operator:
+On OpenShift 4.20 and later, the Gateway API CRDs are included by default. You must create the `openshift-default` GatewayClass, which is the [officially supported GatewayClass](https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/ingress_and_load_balancing/configuring-ingress-cluster-traffic#ingress-gateway-api) provided by the OpenShift Ingress Operator:
 
 ```bash
 oc apply -f - <<EOF
