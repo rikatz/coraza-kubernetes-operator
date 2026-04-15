@@ -30,7 +30,7 @@ jobs:
       - name: install chart-releaser
         run: |
           set -o pipefail
-          CR_VERSION="1.7.0"
+          CR_VERSION="1.8.1"
           CR_ARCHIVE="chart-releaser_${CR_VERSION}_linux_amd64.tar.gz"
           CR_BASE_URL="https://github.com/helm/chart-releaser/releases/download/v${CR_VERSION}"
           curl -fsSLo "${CR_ARCHIVE}" "${CR_BASE_URL}/${CR_ARCHIVE}"
@@ -86,11 +86,28 @@ jobs:
       # --charts-repo is intentionally omitted: it is deprecated in cr and has no
       # effect. The index URLs always come from the GitHub release asset's
       # BrowserDownloadURL, pointing users directly to GitHub Releases for downloads.
+      # cr index loads the previous index from origin/gh-pages to merge entries.
+      # This deployment uses actions/deploy-pages (artifact-based), which never
+      # creates a gh-pages branch, so we create an empty local ref to satisfy cr.
+      - name: stub gh-pages ref for cr index
+        run: |
+          export GIT_AUTHOR_NAME="github-actions[bot]"
+          export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="github-actions[bot]"
+          export GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          if git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
+            echo "refs/remotes/origin/gh-pages already exists; using fetched history."
+          else
+            EMPTY_TREE=$(git mktree < /dev/null)
+            EMPTY_COMMIT=$(git commit-tree "$EMPTY_TREE" -m "stub")
+            git update-ref refs/remotes/origin/gh-pages "$EMPTY_COMMIT"
+          fi
+
       - name: generate helm repo index
         run: |
           cr index \
             --owner "${{ github.repository_owner }}" \
-            --git-repo "${GITHUB_REPOSITORY#*/}" \
+            --git-repo "${{ github.event.repository.name }}" \
             --release-name-template "v{{ .Version }}" \
             --package-path .cr-release-packages \
             --index-path docs/public/index.yaml
