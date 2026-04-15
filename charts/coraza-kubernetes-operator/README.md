@@ -2,7 +2,7 @@
 
 Deploys the [Coraza Kubernetes Operator](https://github.com/networking-incubator/coraza-kubernetes-operator) — declarative Web Application Firewall (WAF) support for Kubernetes Gateways.
 
-> **Requires Kubernetes ≥1.33.0 or OpenShift Container Platform ≥4.20.** The chart and operator use `resizePolicy` and the `Chart.yaml` enforces this minimum.
+> **Requires Kubernetes ≥1.32.0 or OpenShift Container Platform ≥4.20.** The `Chart.yaml` enforces this minimum via `kubeVersion`.
 
 
 ## Installation
@@ -15,8 +15,7 @@ After a version tag is pushed, CI publishes the packaged chart to the GitHub rel
 helm repo add coraza-kubernetes-operator https://networking-incubator.github.io/coraza-kubernetes-operator/
 helm repo update
 helm upgrade --install coraza-kubernetes-operator coraza-kubernetes-operator/coraza-kubernetes-operator \
-  --namespace coraza-system \
-  --create-namespace
+  --namespace coraza-system
 ```
 
 Forks and other remotes use their own Pages URL: `https://<owner>.github.io/<repository>/`.
@@ -71,7 +70,7 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 | `createNamespace`                                     | bool   | `true`                                                    | Create the release namespace as a chart-managed resource with PSS labels                                    |
 | `openshift.enabled`                                   | bool   | `false`                                                   | Omit UID/fsGroup from pod security context for OpenShift SCC compatibility                                  |
 | `podSecurityStandard.version`                         | string | `latest`                                                  | Kubernetes version for Pod Security Standard labels (`latest` or `vX.YZ`)                                    |
-| **Kubernetes version**                                | string | `1.33+`                                                   | Minimum cluster version required by this chart (due to resizePolicy API)                                    |
+| **Kubernetes version**                                | string | `1.32+`                                                   | Minimum cluster version required by this chart                                                              |
 | `nodeSelector`                                        | object | `{}`                                                      | Node selector constraints                                                                                   |
 | `tolerations`                                         | list   | `[]`                                                      | Tolerations                                                                                                 |
 | `affinity`                                            | object | `{}`                                                      | Affinity rules                                                                                              |

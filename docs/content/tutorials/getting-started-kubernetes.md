@@ -32,8 +32,9 @@ helm repo update
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
-  --create-namespace
 ```
+
+For more installation options (version pinning, custom values), see the [Install on Kubernetes with Helm]({{< relref "../howto/install-kubernetes-helm" >}}) how-to guide.
 
 Verify that the operator is running:
 

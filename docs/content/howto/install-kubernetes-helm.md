@@ -10,10 +10,12 @@ This guide covers installing the Coraza Kubernetes Operator using Helm on a stan
 ## Prerequisites
 
 - Kubernetes cluster running **v1.32 or later**
-- [Istio](https://istio.io/latest/docs/setup/) installed with Gateway API CRDs
+- [Istio](https://istio.io/latest/docs/setup/) installed with [Gateway API CRDs](https://gateway-api.sigs.k8s.io/)
 - [Helm 3](https://helm.sh/docs/intro/install/) installed
 
-## Add the Helm Repository
+## Install from the Helm Repository
+
+Add the Helm repository hosted on GitHub Pages and install:
 
 ```bash
 helm repo add coraza-kubernetes-operator \
@@ -21,24 +23,31 @@ helm repo add coraza-kubernetes-operator \
 helm repo update
 ```
 
-## Install with Default Values
+```bash
+helm upgrade --install coraza-kubernetes-operator \
+  coraza-kubernetes-operator/coraza-kubernetes-operator \
+  --namespace coraza-system
+```
+
+### Pin a Specific Version
 
 ```bash
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
-  --create-namespace
+  --version <chart-version>
 ```
+
+Replace `<chart-version>` with the desired version (e.g. `0.1.0`). Available versions are listed on the [releases page](https://github.com/networking-incubator/coraza-kubernetes-operator/releases).
 
 ## Customize the Installation
 
-Override default values by passing a values file or individual settings:
+Override default values by passing individual settings:
 
 ```bash
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
-  --create-namespace \
   --set logging.level=debug \
   --set metrics.serviceMonitor.enabled=true
 ```
@@ -68,7 +77,6 @@ resources:
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
   --namespace coraza-system \
-  --create-namespace \
   -f custom-values.yaml
 ```
 

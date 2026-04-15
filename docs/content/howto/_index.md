@@ -13,7 +13,7 @@ How-to guides address specific tasks. Unlike tutorials, they assume you already 
 ## Installation
 
 - [Install on Kubernetes with Helm]({{< relref "install-kubernetes-helm" >}})
-- [Install on OpenShift via OperatorHub]({{< relref "install-openshift-operatorhub" >}})
+- [Install on OpenShift]({{< relref "install-openshift-operatorhub" >}})
 
 ## Configuration
 
