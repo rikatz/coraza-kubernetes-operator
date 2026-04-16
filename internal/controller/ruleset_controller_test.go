@@ -695,9 +695,9 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	t.Run("ruleset with unsupported rule should be rejected", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
-		t.Log("Creating ConfigMap with an unsupported response body inspection rule")
+		t.Log("Creating ConfigMap with an unsupported multipart charset detection rule")
 		cm := utils.NewTestConfigMap("unsupported-rules", testNamespace,
-			`SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Data leakage'"`)
+			`SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny,status:403,msg:'Charset attack'"`)
 		require.NoError(t, k8sClient.Create(ctx, cm))
 		t.Cleanup(func() {
 			if err := k8sClient.Delete(ctx, cm); err != nil {
@@ -751,8 +751,8 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		require.NotNil(t, ready)
 		assert.Equal(t, metav1.ConditionFalse, ready.Status)
 		assert.Equal(t, "UnsupportedRules", ready.Reason)
-		assert.Contains(t, ready.Message, "950150")
-		assert.Contains(t, ready.Message, "response body inspection")
+		assert.Contains(t, ready.Message, "922110")
+		assert.Contains(t, ready.Message, "multipart charset detection")
 
 		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
 		require.NotNil(t, degraded)
@@ -842,7 +842,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		})
 
 		cmUnsupported := utils.NewTestConfigMap("mix-unsupported", testNamespace,
-			`SecRule RESPONSE_BODY "@rx leak" "id:956100,phase:4,deny,status:403"`)
+			`SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny,status:403"`)
 		require.NoError(t, k8sClient.Create(ctx, cmUnsupported))
 		t.Cleanup(func() {
 			if err := k8sClient.Delete(ctx, cmUnsupported); err != nil {
@@ -904,7 +904,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 
 		t.Log("Creating ConfigMap with unsupported rules (simulating a bad update)")
 		cm := utils.NewTestConfigMap("update-to-unsupported-rules", testNamespace,
-			`SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Bad update'"`)
+			`SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny,status:403,msg:'Bad update'"`)
 		require.NoError(t, k8sClient.Create(ctx, cm))
 		t.Cleanup(func() {
 			if err := k8sClient.Delete(ctx, cm); err != nil {
@@ -948,8 +948,8 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	t.Run("ruleset with skip annotation should be cached with unsupported rules listed in status", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
-		t.Log("Creating ConfigMap with an unsupported response body inspection rule")
-		const unsupportedRule = `SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Data leakage'"`
+		t.Log("Creating ConfigMap with an unsupported multipart charset detection rule")
+		const unsupportedRule = `SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny,status:403,msg:'Charset attack'"`
 		cm := utils.NewTestConfigMap("skip-annotation-rules", testNamespace, unsupportedRule)
 		require.NoError(t, k8sClient.Create(ctx, cm))
 		t.Cleanup(func() {
@@ -995,7 +995,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		cacheKey := testNamespace + "/skip-annotation-ruleset"
 		entry, ok := ruleSetCache.Get(cacheKey)
 		assert.True(t, ok, "cache should contain entry when annotation overrides unsupported rules check")
-		assert.Contains(t, entry.Rules, "id:950150")
+		assert.Contains(t, entry.Rules, "id:922110")
 
 		t.Log("Verifying Ready=True with unsupported rules listed in the message")
 		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
@@ -1006,7 +1006,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		require.NotNil(t, ready)
 		assert.Equal(t, metav1.ConditionTrue, ready.Status)
 		assert.Equal(t, "RulesCached", ready.Reason)
-		assert.Contains(t, ready.Message, "950150", "ready message should list the detected unsupported rule ID")
+		assert.Contains(t, ready.Message, "922110", "ready message should list the detected unsupported rule ID")
 
 		t.Log("Verifying Degraded condition is absent")
 		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
