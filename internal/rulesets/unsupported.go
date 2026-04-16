@@ -149,24 +149,6 @@ func buildRegistry() map[int]UnsupportedRule {
 	// Incompatible Tier — rules that do not function in WASM mode
 	// -------------------------------------------------------------------------
 
-	// Response body inspection: Envoy does not pass response body to WASM filters.
-	for _, id := range []int{
-		950150,
-		951110, 951120, 951130, 951140, 951150, 951160, 951170, 951180, 951190, 951200, 951210, 951220, 951230, 951240, 951250, 951260,
-		952110,
-		953101, 953120,
-		954100, 954101, 954120,
-		955100, 955110, 955120, 955260, 955400,
-		956100, 956110,
-	} {
-		r[id] = UnsupportedRule{
-			ID:          id,
-			Category:    "response body inspection",
-			Tier:        TierIncompatible,
-			Description: "response body inspection is not supported in Envoy WASM",
-		}
-	}
-
 	// Multipart charset detection: Envoy body handling prevents detection.
 	r[922110] = UnsupportedRule{
 		ID:          922110,

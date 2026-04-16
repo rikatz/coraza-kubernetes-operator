@@ -25,20 +25,20 @@ Both tiers are rejected by default. For the complete list of affected rule IDs, 
 
 ## Overview
 
-Out of approximately 3,300 CoreRuleSet conformance tests, 190 tests (6%) are currently ignored, resulting in a 94% pass rate. These ignored tests fall into four categories:
+Out of approximately 4,600 CoreRuleSet conformance tests, 53 tests are currently ignored and 42 are overridden with adjusted expectations, resulting in a ~98% pass rate. These fall into four categories:
 
-| Category | Tests | Impact |
-|----------|-------|--------|
-| Enhanced Security | 45 | Positive - Envoy provides additional protection |
-| Tool Limitations | 113 | Requires alternative controls or monitoring |
-| Coraza/WASM Bugs | 13 | Requires fixes in Coraza or coraza-proxy-wasm |
-| Under Investigation | 19 | Requires further analysis |
+| Category | Tests | Type | Impact |
+|----------|-------|------|--------|
+| Enhanced Security | 42 | Overridden | Positive - Envoy provides additional protection |
+| Tool Limitations | 21 | Ignored | Requires alternative controls or monitoring |
+| Coraza/WASM Bugs | 13 | Ignored | Requires fixes in Coraza or coraza-proxy-wasm |
+| Under Investigation | 19 | Ignored | Requires further analysis |
 
 ---
 
-## Enhanced Security (45 tests)
+## Enhanced Security (42 overridden tests)
 
-These tests fail because Envoy blocks or sanitizes attacks before they reach the WAF. This represents defense-in-depth, not a security gap.
+These tests are overridden with adjusted expectations (in `.ftw-overrides.yml`) rather than ignored. Envoy blocks or sanitizes attacks before they reach the WAF. This represents defense-in-depth, not a security gap.
 
 ### Invalid HTTP Methods and Malformed Requests (9 tests)
 
@@ -86,38 +86,15 @@ Envoy enforces HTTP protocol specifications:
 
 ---
 
-## Tool Limitations (113 tests)
+## Tool Limitations (21 tests)
 
 These represent actual limitations that may allow attacks to bypass detection. Alternative controls are recommended.
 
-### Response Body Inspection (79 tests)
-
-Response body content is not available for inspection by phase 4 rules in the WASM environment.
-
-**Affected rule families:**
-- 950xxx: Data leakage detection (9 tests)
-- 951xxx: SQL error messages (20 tests)
-- 952xxx: Java error messages (10 tests)
-- 953xxx: PHP error messages (9 tests)
-- 954xxx: IIS error messages (7 tests)
-- 955xxx: Web shell detection (10 tests)
-- 956xxx: Ruby error messages (14 tests)
-
-**Impact:** Data leakage, error messages, and web shells in responses are not detected.
-
-**Root cause:** Envoy does not currently pass response body content to WASM filters for inspection, despite `SecResponseBodyAccess On` configuration.
-
-**Mitigation:**
-- Deploy as standalone reverse proxy for full response inspection
-- Implement application-level logging and monitoring
-- Use SIEM integration for data leakage detection
-- Monitor response status codes via Envoy access logs
-
-### Multipart Charset Detection (30 tests)
+### Multipart Charset Detection (17 tests)
 
 Illegal charset detection in multipart form headers does not function in the Envoy/Kubernetes environment.
 
-**Affected rule:** 922110 (all 30 test cases)
+**Affected rule:** 922110 (17 test cases)
 
 **Impact:** Charset-based encoding attacks (utf-7, utf-16, shift-jis, etc.) in multipart uploads are not detected.
 
@@ -199,7 +176,7 @@ These require further analysis to determine appropriate action:
 - **CoreRuleSet**: v4.24.1
 - **Envoy/Istio**: WASM filter environment
 - **coraza-proxy-wasm**: Latest
-- **Documentation Date**: 2026-03-17
-- **Test Coverage**: 94% pass rate (190 ignored / ~3,300 total)
+- **Documentation Date**: 2026-04-16
+- **Test Coverage**: ~98% pass rate (53 ignored + 42 overridden / ~4,600 total)
 
 For configuration details of ignored tests, see [test/conformance/ftw.yml](test/conformance/ftw.yml).

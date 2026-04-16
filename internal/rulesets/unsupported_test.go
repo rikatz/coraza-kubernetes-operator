@@ -31,9 +31,9 @@ func TestRegistryCompleteness(t *testing.T) {
 	total := len(incompatible) + len(redundant)
 
 	assert.Equal(t, total, len(unsupportedRules), "total registry size should equal sum of tiers")
-	assert.Len(t, incompatible, 46, "incompatible tier count")
+	assert.Len(t, incompatible, 16, "incompatible tier count")
 	assert.Len(t, redundant, 21, "redundant tier count")
-	assert.Equal(t, 67, total, "total unsupported rules")
+	assert.Equal(t, 37, total, "total unsupported rules")
 }
 
 func TestAllUnsupportedRuleIDs(t *testing.T) {
@@ -56,28 +56,6 @@ func TestAllUnsupportedRuleIDs(t *testing.T) {
 	}
 	for _, id := range redundant {
 		assert.True(t, idSet[id], "redundant ID %d should be in AllUnsupportedRuleIDs", id)
-	}
-}
-
-func TestCheckUnsupportedRules_ResponseBodyInspection(t *testing.T) {
-	responseBodyIDs := []int{
-		950150,
-		951110, 951120, 951130, 951140, 951150, 951160, 951170, 951180, 951190, 951200, 951210, 951220, 951230, 951240, 951250, 951260,
-		952110,
-		953101, 953120,
-		954100, 954101, 954120,
-		955100, 955110, 955120, 955260, 955400,
-		956100, 956110,
-	}
-
-	for _, id := range responseBodyIDs {
-		t.Run(fmt.Sprintf("rule_%d", id), func(t *testing.T) {
-			found := CheckUnsupportedRules(secRuleWithID(id))
-			require.Len(t, found, 1)
-			assert.Equal(t, id, found[0].ID)
-			assert.Equal(t, "response body inspection", found[0].Category)
-			assert.Equal(t, TierIncompatible, found[0].Tier)
-		})
 	}
 }
 
@@ -238,22 +216,22 @@ func TestCheckUnsupportedRules_NoIDs(t *testing.T) {
 }
 
 func TestCheckUnsupportedRules_MixedSupportedAndUnsupported(t *testing.T) {
-	rules := secRulesWithIDs(1, 950150, 2, 922110, 3)
+	rules := secRulesWithIDs(1, 920274, 2, 922110, 3)
 	found := CheckUnsupportedRules(rules)
 	require.Len(t, found, 2)
-	assert.Equal(t, 922110, found[0].ID)
-	assert.Equal(t, 950150, found[1].ID)
+	assert.Equal(t, 920274, found[0].ID)
+	assert.Equal(t, 922110, found[1].ID)
 }
 
 func TestCheckUnsupportedRules_DuplicateIDsDeduped(t *testing.T) {
-	rules := secRuleWithID(950150) + "\n" + secRuleWithID(950150)
+	rules := secRuleWithID(922110) + "\n" + secRuleWithID(922110)
 	found := CheckUnsupportedRules(rules)
 	require.Len(t, found, 1)
-	assert.Equal(t, 950150, found[0].ID)
+	assert.Equal(t, 922110, found[0].ID)
 }
 
 func TestCheckUnsupportedRules_CommentedOutRulesIgnored(t *testing.T) {
-	rules := `# SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny"
+	rules := `# SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny"
 SecRule REQUEST_URI "@contains /admin" "id:1,phase:1,deny"`
 	found := CheckUnsupportedRules(rules)
 	assert.Nil(t, found, "commented-out unsupported rule should be ignored")
@@ -261,7 +239,7 @@ SecRule REQUEST_URI "@contains /admin" "id:1,phase:1,deny"`
 
 func TestCheckUnsupportedRules_MixedCommentAndActive(t *testing.T) {
 	rules := `# This rule is disabled:
-# SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny"
+# SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny"
 SecRule REQUEST_URI "@rx test" "id:911100,phase:1,pass"`
 	found := CheckUnsupportedRules(rules)
 	require.Len(t, found, 1)
@@ -269,14 +247,14 @@ SecRule REQUEST_URI "@rx test" "id:911100,phase:1,pass"`
 }
 
 func TestCheckUnsupportedRules_QuotedIDs(t *testing.T) {
-	rules := `SecRule REQUEST_URI "@rx test" "id:'950150',phase:1,pass"`
+	rules := `SecRule REQUEST_URI "@rx test" "id:'922110',phase:1,pass"`
 	found := CheckUnsupportedRules(rules)
 	require.Len(t, found, 1)
-	assert.Equal(t, 950150, found[0].ID)
+	assert.Equal(t, 922110, found[0].ID)
 }
 
 func TestCheckUnsupportedRules_MixedTiers(t *testing.T) {
-	rules := secRulesWithIDs(950150, 911100)
+	rules := secRulesWithIDs(922110, 911100)
 	found := CheckUnsupportedRules(rules)
 	require.Len(t, found, 2)
 
@@ -291,24 +269,24 @@ func TestFormatUnsupportedMessage_Empty(t *testing.T) {
 
 func TestFormatUnsupportedMessage_SingleRule(t *testing.T) {
 	found := []UnsupportedRule{
-		{ID: 950150, Category: "response body inspection", Tier: TierIncompatible, Description: "response body inspection is not supported in Envoy WASM"},
+		{ID: 922110, Category: "multipart charset detection", Tier: TierIncompatible, Description: "multipart charset detection does not function in Envoy/Kubernetes"},
 	}
 	msg := FormatUnsupportedMessage(found)
 	assert.Contains(t, msg, "1 unsupported rule(s)")
-	assert.Contains(t, msg, "rule 950150")
-	assert.Contains(t, msg, "response body inspection")
+	assert.Contains(t, msg, "rule 922110")
+	assert.Contains(t, msg, "multipart charset detection")
 	assert.Contains(t, msg, "LIMITATIONS.md")
 }
 
 func TestFormatUnsupportedMessage_MultipleRules(t *testing.T) {
 	found := []UnsupportedRule{
+		{ID: 920274, Category: "PL4 false positives", Tier: TierIncompatible, Description: "PL4 false positives from Envoy :path pseudo-header population"},
 		{ID: 922110, Category: "multipart charset detection", Tier: TierIncompatible, Description: "multipart charset detection does not function"},
-		{ID: 950150, Category: "response body inspection", Tier: TierIncompatible, Description: "response body inspection not supported"},
 	}
 	msg := FormatUnsupportedMessage(found)
 	assert.Contains(t, msg, "2 unsupported rule(s)")
+	assert.Contains(t, msg, "rule 920274")
 	assert.Contains(t, msg, "rule 922110")
-	assert.Contains(t, msg, "rule 950150")
 }
 
 // -----------------------------------------------------------------------------

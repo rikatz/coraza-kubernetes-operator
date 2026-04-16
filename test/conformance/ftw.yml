@@ -23,12 +23,7 @@ testoverride:
     # IMPACT: Could allow attacks to bypass detection
     # ---------------------------------------------------------------------------
 
-    # Response Body Inspection - Envoy/Istio WASM limitation (79 tests)
-    # NOTE: Response bodies are NOT available for inspection in WASM environment
-    # IMPACT: Data leakage, error messages, and web shells in responses are NOT detected
-    # WORKAROUND: Use separate response logging/monitoring or deploy as reverse proxy
-
-    # Multipart Charset Detection - Envoy body handling issue (30 tests)
+    # Multipart Charset Detection - Envoy body handling issue (17 tests)
     # NOTE: coraza-proxy-wasm unit tests PROVE this works in WASM
     # ISSUE: Envoy request body handling prevents detection in K8s environment
     '922110-1': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
@@ -125,15 +120,14 @@ testoverride:
     '980170-3': 'INVESTIGATE: retry_once mechanism not working in environment'
 
     # =============================================================================
-    # Summary of Ignored Tests by Category (Total: 145 tests):
+    # Summary of Ignored Tests by Category (Total: 53 tests):
     #
     # NOTE: 42 ENHANCED SECURITY tests moved to .ftw-overrides.yml as platform
     # overrides (they now run with adjusted expectations instead of being skipped).
     #
-    # CATEGORY 2: TOOL LIMITATION (113 tests)
+    # CATEGORY 2: TOOL LIMITATION (21 tests)
     #   - Environmental constraints that could cause false negatives
-    #   - Response body inspection: 79 tests
-    #   - Multipart charset detection: 30 tests
+    #   - Multipart charset detection: 17 tests
     #   - PL4 false positives: 4 tests
     #
     # CATEGORY 3: CORAZA/WASM ISSUES (13 tests)
@@ -154,5 +148,5 @@ testoverride:
     #   - PL4 false positives: 2 tests
     #   - retry_once: 5 tests
     #
-    # Test Pass Rate: ~98% (64 ignored + 42 overridden out of ~3,300 total tests)
+    # Test Pass Rate: ~98% (53 ignored + 42 overridden out of ~4,600 total tests)
     # =============================================================================
