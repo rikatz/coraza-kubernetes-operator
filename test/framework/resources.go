@@ -135,6 +135,15 @@ func defaultEchoImage() string {
 	return fallbackEchoImage
 }
 
+const fallbackConformanceImage = "ghcr.io/coreruleset/albedo:0.3.0"
+
+func defaultConformanceEchoImage() string {
+	if image := os.Getenv("CONFORMANCE_ECHO_IMAGE"); image != "" {
+		return image
+	}
+	return fallbackConformanceImage
+}
+
 // SimpleBlockRule generates a SecLang rule that denies requests containing
 // the target string with the given rule ID.
 func SimpleBlockRule(id int, target string) string {
@@ -512,16 +521,24 @@ func (s *Scenario) CreateHTTPRoute(namespace, name, gatewayName, backendName str
 	})
 }
 
+// CreateConformanceEcho deploys the Albedo backend (OWASP/Coreruleset backend)
+// and waits for at least one pod to be Ready. The image is used for FTW tests
+func (s *Scenario) CreateConformanceEcho(namespace, name string) {
+	s.createEchoBackend(namespace, name, defaultConformanceEchoImage(), 8080)
+}
+
 // CreateEchoBackend deploys the Gateway API echo server (Deployment + Service)
 // and waits for at least one pod to be Ready. The echo image defaults to
 // ECHO_IMAGE env var or the built-in Gateway API conformance echo image.
 func (s *Scenario) CreateEchoBackend(namespace, name string) {
+	s.createEchoBackend(namespace, name, defaultEchoImage(), 3000)
+}
+
+func (s *Scenario) createEchoBackend(namespace, name, echoImage string, containerPort int32) {
 	s.T.Helper()
 	ctx := s.T.Context()
 
-	echoImage := defaultEchoImage()
 	replicas := int32(1)
-	containerPort := int32(3000)
 	servicePort := int32(80)
 
 	dep := &appsv1.Deployment{
