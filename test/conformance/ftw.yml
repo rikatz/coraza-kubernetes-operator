@@ -28,99 +28,6 @@ testoverride:
     # IMPACT: Data leakage, error messages, and web shells in responses are NOT detected
     # WORKAROUND: Use separate response logging/monitoring or deploy as reverse proxy
 
-    # RESPONSE-950-DATA-LEAKAGES (9 tests)
-    '950150-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '950150-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '950150-3': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '950150-4': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '950150-5': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '950150-6': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '950150-7': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '950150-8': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '950150-9': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-
-    # RESPONSE-951-DATA-LEAKAGES-SQL (20 tests)
-    '951110-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951120-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951130-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951140-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951150-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951160-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951170-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951180-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951190-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951200-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951210-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951210-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951220-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951220-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951230-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951230-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951240-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951240-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951250-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '951260-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-
-    # RESPONSE-952-DATA-LEAKAGES-JAVA (10 tests)
-    '952110-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '952110-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '952110-3': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '952110-4': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '952110-5': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '952110-6': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '952110-7': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '952110-8': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '952110-9': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '952110-10': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-
-    # RESPONSE-953-DATA-LEAKAGES-PHP (9 tests)
-    '953101-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '953101-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '953101-3': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '953101-4': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '953101-5': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '953120-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '953120-3': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '953120-5': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '953120-7': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-
-    # RESPONSE-954-DATA-LEAKAGES-IIS (7 tests)
-    '954100-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '954100-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '954100-3': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '954101-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '954101-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '954120-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '954120-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-
-    # RESPONSE-955-WEB-SHELLS (10 tests)
-    '955100-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '955100-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '955100-3': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '955110-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '955120-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '955120-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '955260-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '955400-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '955400-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '955400-3': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-
-    # RESPONSE-956-DATA-LEAKAGES-RUBY (14 tests)
-    '956100-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-3': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-4': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-5': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-6': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-7': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-8': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-9': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-10': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956100-11': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956110-1': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956110-2': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-    '956110-3': 'TOOL LIMITATION: Response body inspection not supported in Envoy WASM'
-
     # Multipart Charset Detection - Envoy body handling issue (30 tests)
     # NOTE: coraza-proxy-wasm unit tests PROVE this works in WASM
     # ISSUE: Envoy request body handling prevents detection in K8s environment
@@ -128,32 +35,19 @@ testoverride:
     '922110-2': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-3': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-4': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-5': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-6': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-7': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-8': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-9': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-10': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-11': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-12': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-13': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-14': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-15': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-16': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-17': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-18': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-19': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-20': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-21': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-22': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-23': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-24': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-25': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-26': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-27': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-28': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
     '922110-29': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
-    '922110-30': 'TOOL LIMITATION: Multipart charset detection - Envoy body handling issue'
 
     # PL4 False Positives - Envoy :path header population (4 tests)
     '920274-2': 'TOOL LIMITATION: PL4 false positive - Envoy populates :path with invalid chars'
@@ -260,5 +154,5 @@ testoverride:
     #   - PL4 false positives: 2 tests
     #   - retry_once: 5 tests
     #
-    # Test Pass Rate: ~95% (145 ignored + 42 overridden out of ~3,300 total tests)
+    # Test Pass Rate: ~98% (64 ignored + 42 overridden out of ~3,300 total tests)
     # =============================================================================

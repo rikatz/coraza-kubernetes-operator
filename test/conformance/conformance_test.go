@@ -110,7 +110,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	s.CreateGateway(ns, gwName)
 	s.ExpectGatewayProgrammed(ns, gwName)
 	s.Step("deploy echo backend")
-	s.CreateEchoBackend(ns, "echo")
+	s.CreateConformanceEcho(ns, "echo")
 	s.CreateHTTPRoute(ns, "echo-route", gwName, "echo")
 
 	// -------------------------------------------------------------------------
