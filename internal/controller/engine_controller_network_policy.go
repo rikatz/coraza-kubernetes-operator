@@ -150,9 +150,9 @@ func (r *EngineReconciler) handleNetworkPolicyDeletion(ctx context.Context, log 
 // applyNetworkPolicy creates or updates a NetworkPolicy in the operator namespace
 // that allows ingress from the Engine's gateway pods to the cache server port.
 func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
-	ws := workloadSelector(engine)
+	ws := targetLabelSelector(engine)
 	if ws == nil || (len(ws.MatchLabels) == 0 && len(ws.MatchExpressions) == 0) {
-		return fmt.Errorf("workload selector with at least one match criterion is required for NetworkPolicy creation")
+		return fmt.Errorf("cannot derive a valid workload selector from spec.target: ensure target type and name are set")
 	}
 
 	existing, err := r.findNetworkPolicyForEngine(ctx, engine.Namespace, engine.Name)
@@ -214,26 +214,15 @@ func (r *EngineReconciler) cleanupNetworkPolicy(ctx context.Context, log logr.Lo
 // Engine Controller - NetworkPolicy Builder
 // -----------------------------------------------------------------------------
 
-// workloadSelector returns the Engine's workload selector, or nil if the
-// driver chain is not fully configured.
-func workloadSelector(engine *wafv1alpha1.Engine) *metav1.LabelSelector {
-	if engine.Spec.Driver == nil || engine.Spec.Driver.Istio == nil ||
-		engine.Spec.Driver.Istio.Wasm == nil {
-		return nil
-	}
-	return engine.Spec.Driver.Istio.Wasm.WorkloadSelector
-}
-
 func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *networkingv1.NetworkPolicy {
 	protocol := corev1.ProtocolTCP
 	port := intstr.FromInt32(int32(DefaultRuleSetCacheServerPort))
 
-	// Deep-copy the Engine workload selector (including MatchLabels and
-	// MatchExpressions) so the NetworkPolicy restricts ingress to the workloads
-	// selected by the Engine configuration. Do not assume this exactly matches
-	// WasmPlugin selector semantics unless that builder also preserves the full
-	// LabelSelector.
-	podSelector := workloadSelector(engine).DeepCopy()
+	ws := targetLabelSelector(engine)
+	if ws == nil {
+		ws = &metav1.LabelSelector{}
+	}
+	podSelector := ws.DeepCopy()
 
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{

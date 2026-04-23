@@ -163,7 +163,7 @@ func parseFlags() config {
 	flag.StringVar(&cfg.envoyClusterName, "envoy-cluster-name", "", "The Envoy cluster name pointing to the RuleSet cache server (required)")
 	flag.StringVar(&cfg.istioRevision, "istio-revision", "", "The Istio revision label value for managed Istio resources")
 	flag.StringVar(&cfg.defaultWasmImage, "default-wasm-image", resolveDefaultWasmImage(),
-		"Default OCI reference for the Coraza WASM plugin when an Engine omits spec.driver.istio.wasm.image")
+		"Default OCI reference for the Coraza WASM plugin when an Engine omits spec.driver.wasm.image")
 	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
 
 	opts := zap.Options{Development: false}

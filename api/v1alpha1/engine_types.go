@@ -37,6 +37,8 @@ func init() {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="RuleSet",type=string,JSONPath=`.spec.ruleSet.name`
+// +kubebuilder:printcolumn:name="Target Type",type=string,JSONPath=`.spec.target.type`
+// +kubebuilder:printcolumn:name="Target Name",type=string,JSONPath=`.spec.target.name`
 // +kubebuilder:printcolumn:name="Failure Policy",type=string,JSONPath=`.spec.failurePolicy`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
@@ -81,8 +83,6 @@ type EngineList struct {
 // -----------------------------------------------------------------------------
 
 // EngineSpec defines the desired state of an Engine.
-//
-// +kubebuilder:validation:XValidation:rule="has(self.driver)",message="driver is required"
 type EngineSpec struct {
 	// ruleSet specifies the RuleSet resource that will be used to load rules
 	// into the Engine. The referenced RuleSet must be in the same namespace
@@ -91,12 +91,12 @@ type EngineSpec struct {
 	// +required
 	RuleSet RuleSetReference `json:"ruleSet,omitzero"`
 
-	// driver specifies the driver configuration for the engine. This
-	// determines how the WAF engine will be deployed and integrated with some
-	// implementation. Currently only supports Istio ingress Gateways.
+	// target identifies the workload that the Engine protects. The operator
+	// derives the workload selector from this reference (e.g., for Gateway
+	// targets, the GEP-1762 gateway-name label is used).
 	//
-	// +optional
-	Driver *DriverConfig `json:"driver,omitempty"`
+	// +required
+	Target EngineTarget `json:"target,omitzero"`
 
 	// failurePolicy determines the behavior when the WAF is not ready or
 	// encounters errors. Valid values are:
@@ -112,6 +112,22 @@ type EngineSpec struct {
 	// +optional
 	// +default="fail"
 	FailurePolicy FailurePolicy `json:"failurePolicy,omitempty"`
+
+	// ruleSetCacheServer contains configuration for the ruleset cache server.
+	//
+	// When omitted, no cache server will be used and no rulesets will be
+	// dynamically loaded. This implies that your Engine will be deployed with
+	// all rules statically embedded.
+	//
+	// +optional
+	RuleSetCacheServer *RuleSetCacheServerConfig `json:"ruleSetCacheServer,omitempty"`
+
+	// driver configures the mechanism used to deploy the WAF filter into the
+	// target workload. When omitted, the operator uses a default driver for the
+	// underlying Engine (eg.: WASM for Istio)
+	//
+	// +optional
+	Driver DriverConfig `json:"driver,omitempty,omitzero"`
 }
 
 // -----------------------------------------------------------------------------
@@ -140,16 +156,6 @@ type EngineStatus struct {
 	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
-
-	// gateways is the list of Gateways in the same namespace that match
-	// the Engine's workload selector.
-	//
-	// +listType=map
-	// +listMapKey=name
-	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=16
-	// +optional
-	Gateways []GatewayReference `json:"gateways,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -178,17 +184,6 @@ const (
 // RuleSetReference is a reference to a RuleSet resource.
 type RuleSetReference struct {
 	// name is the name of the RuleSet in the same namespace as the Engine.
-	//
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	Name string `json:"name,omitempty"`
-}
-
-// GatewayReference is a reference to a Gateway resource in the same namespace
-// as the Engine.
-type GatewayReference struct {
-	// name is the name of the Gateway in the same namespace as the Engine.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1

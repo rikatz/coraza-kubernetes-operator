@@ -71,7 +71,7 @@ type EngineReconciler struct {
 	ruleSetCacheServerCluster string
 	istioRevision             string
 	// defaultWasmImage is the OCI URL used for Istio WasmPlugin spec.url when the
-	// Engine omits spec.driver.istio.wasm.image.
+	// Engine omits spec.driver.wasm.image.
 	defaultWasmImage  string
 	operatorNamespace string
 
@@ -197,10 +197,10 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // EngineReconciler - Driver Configuration
 // -----------------------------------------------------------------------------
 
-// handleInvalidDriverConfiguration marks the engine as degraded due to invalid
-// driver configuration. Currently, only Istio driver with Wasm mode is supported.
+// handleInvalidDriverConfiguration marks the engine as degraded due to an
+// unsupported driver type.
 func (r *EngineReconciler) handleInvalidDriverConfiguration(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
-	err := fmt.Errorf("invalid driver configuration: only Istio driver with Wasm mode is currently supported")
+	err := fmt.Errorf("unsupported driver type %q: only %q is currently supported", engine.Spec.Driver.Type, wafv1alpha1.DriverTypeWasm)
 	logError(log, req, "Engine", err, "Invalid driver configuration")
 
 	if engine.Status == nil {
@@ -218,15 +218,15 @@ func (r *EngineReconciler) handleInvalidDriverConfiguration(ctx context.Context,
 // -----------------------------------------------------------------------------
 
 func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine wafv1alpha1.Engine) (ctrl.Result, error) {
-	switch {
-	case engine.Spec.Driver != nil && engine.Spec.Driver.Istio != nil:
-		switch {
-		case engine.Spec.Driver.Istio.Wasm != nil:
-			logDebug(log, req, "Engine", "Using Istio driver with WASM mode")
-			return r.provisionIstioEngineWithWasm(ctx, log, req, engine)
-		default:
-			return ctrl.Result{}, r.handleInvalidDriverConfiguration(ctx, log, req, &engine)
-		}
+	driverType := wafv1alpha1.DriverTypeWasm
+	if engine.Spec.Driver.Type != "" {
+		driverType = engine.Spec.Driver.Type
+	}
+
+	switch driverType {
+	case wafv1alpha1.DriverTypeWasm:
+		logDebug(log, req, "Engine", "Using WASM driver")
+		return r.provisionWasmDriver(ctx, log, req, engine)
 	default:
 		return ctrl.Result{}, r.handleInvalidDriverConfiguration(ctx, log, req, &engine)
 	}
