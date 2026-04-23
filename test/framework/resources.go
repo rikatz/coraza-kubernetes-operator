@@ -87,20 +87,8 @@ type EngineOpts struct {
 	// RuleSetName is the name of the RuleSet to reference (required).
 	RuleSetName string
 
-	// GatewayName sets the workload selector to target this gateway's pods
-	// via the gateway.networking.k8s.io/gateway-name label. Ignored if
-	// WorkloadLabels or GatewayNames is set.
+	// GatewayName is the name of the Gateway resource to target.
 	GatewayName string
-
-	// GatewayNames sets the workload selector to target pods from multiple
-	// Gateways using a matchExpressions In selector on the
-	// gateway.networking.k8s.io/gateway-name label. Takes precedence over
-	// GatewayName and WorkloadLabels.
-	GatewayNames []string
-
-	// WorkloadLabels overrides the workload selector. Takes precedence over
-	// GatewayName.
-	WorkloadLabels map[string]string
 
 	// WasmImage is the OCI image for the WASM plugin. Defaults to the
 	// CORAZA_WASM_IMAGE env var, or a built-in default.
@@ -244,29 +232,8 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 	if opts.PollInterval == 0 {
 		opts.PollInterval = 5
 	}
-
-	var labelSelector *metav1.LabelSelector
-	if len(opts.GatewayNames) > 0 {
-		labelSelector = &metav1.LabelSelector{
-			MatchExpressions: []metav1.LabelSelectorRequirement{{
-				Key:      "gateway.networking.k8s.io/gateway-name",
-				Operator: metav1.LabelSelectorOpIn,
-				Values:   opts.GatewayNames,
-			}},
-		}
-	} else {
-		workloadLabels := opts.WorkloadLabels
-		if workloadLabels == nil && opts.GatewayName != "" {
-			workloadLabels = map[string]string{
-				"gateway.networking.k8s.io/gateway-name": opts.GatewayName,
-			}
-		}
-		if workloadLabels == nil {
-			workloadLabels = map[string]string{"app": "gateway"}
-		}
-		labelSelector = &metav1.LabelSelector{
-			MatchLabels: workloadLabels,
-		}
+	if opts.GatewayName == "" {
+		opts.GatewayName = "gateway"
 	}
 
 	engine := &wafv1alpha1.Engine{
@@ -282,17 +249,18 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 			RuleSet: wafv1alpha1.RuleSetReference{
 				Name: opts.RuleSetName,
 			},
+			Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: opts.GatewayName,
+			},
 			FailurePolicy: opts.FailurePolicy,
-			Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{
-						Image:            opts.WasmImage,
-						Mode:             wafv1alpha1.IstioIntegrationModeGateway,
-						WorkloadSelector: labelSelector,
-						RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
-							PollIntervalSeconds: opts.PollInterval,
-						},
-					},
+			RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
+				PollIntervalSeconds: opts.PollInterval,
+			},
+			Driver: wafv1alpha1.DriverConfig{
+				Type: wafv1alpha1.DriverTypeWasm,
+				Wasm: &wafv1alpha1.WasmDriverConfig{
+					Image: opts.WasmImage,
 				},
 			},
 		},

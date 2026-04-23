@@ -100,15 +100,14 @@ func NewTestRuleData(name, namespace string, data map[string][]byte) *corev1.Sec
 
 // EngineOptions provides options for creating test Engine resources
 type EngineOptions struct {
-	Name                 string
-	Namespace            string
-	RuleSetName          string
-	WasmImage            string
-	ImagePullSecret      string
-	PollIntervalSeconds  int32
-	WorkloadLabels       map[string]string
-	IstioIntegrationMode wafv1alpha1.IstioIntegrationMode
-	FailurePolicy        wafv1alpha1.FailurePolicy
+	Name                string
+	Namespace           string
+	RuleSetName         string
+	WasmImage           string
+	ImagePullSecret     string
+	PollIntervalSeconds int32
+	GatewayName         string
+	FailurePolicy       wafv1alpha1.FailurePolicy
 }
 
 // NewTestEngine creates a test Engine resource with sensible defaults
@@ -128,11 +127,8 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 	if opts.PollIntervalSeconds == 0 {
 		opts.PollIntervalSeconds = 5
 	}
-	if opts.WorkloadLabels == nil {
-		opts.WorkloadLabels = map[string]string{"app": "gateway"}
-	}
-	if opts.IstioIntegrationMode == "" {
-		opts.IstioIntegrationMode = wafv1alpha1.IstioIntegrationModeGateway
+	if opts.GatewayName == "" {
+		opts.GatewayName = "test-gw"
 	}
 	if opts.FailurePolicy == "" {
 		opts.FailurePolicy = wafv1alpha1.FailurePolicyFail
@@ -147,18 +143,17 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 			RuleSet: wafv1alpha1.RuleSetReference{
 				Name: opts.RuleSetName,
 			},
-			Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{
-						Image: opts.WasmImage,
-						WorkloadSelector: &metav1.LabelSelector{
-							MatchLabels: opts.WorkloadLabels,
-						},
-						Mode: opts.IstioIntegrationMode,
-						RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
-							PollIntervalSeconds: opts.PollIntervalSeconds,
-						},
-					},
+			Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: opts.GatewayName,
+			},
+			RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
+				PollIntervalSeconds: opts.PollIntervalSeconds,
+			},
+			Driver: wafv1alpha1.DriverConfig{
+				Type: wafv1alpha1.DriverTypeWasm,
+				Wasm: &wafv1alpha1.WasmDriverConfig{
+					Image: opts.WasmImage,
 				},
 			},
 			FailurePolicy: opts.FailurePolicy,
@@ -166,7 +161,7 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 	}
 
 	if opts.ImagePullSecret != "" {
-		engine.Spec.Driver.Istio.Wasm.ImagePullSecret = opts.ImagePullSecret
+		engine.Spec.Driver.Wasm.ImagePullSecret = opts.ImagePullSecret
 	}
 
 	return engine

@@ -25,20 +25,20 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 )
 
-// TestEngineGatewayStatus validates that the Engine's status.gateways field
-// is populated with the Gateways that match the Engine's workload selector.
-func TestEngineGatewayStatus(t *testing.T) {
+// TestEngineGatewayTarget validates that an Engine correctly targets Gateway
+// resources via target and enforces WAF rules on their traffic.
+func TestEngineGatewayTarget(t *testing.T) {
 	t.Parallel()
 
 	// -------------------------------------------------------------------------
-	// Sub-test: No matching Gateways
+	// Sub-test: Engine targeting non-existent Gateway still becomes Ready
 	// -------------------------------------------------------------------------
 
-	t.Run("no_matching_gateways", func(t *testing.T) {
+	t.Run("nonexistent_gateway", func(t *testing.T) {
 		t.Parallel()
 		s := fw.NewScenario(t)
 
-		ns := s.GenerateNamespace("gw-status-0")
+		ns := s.GenerateNamespace("gw-target-0")
 
 		s.Step("create rules and engine targeting non-existent gateway")
 		s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
@@ -48,20 +48,19 @@ func TestEngineGatewayStatus(t *testing.T) {
 			GatewayName: "nonexistent-gateway",
 		})
 
-		s.Step("verify engine is ready with no gateways in status")
+		s.Step("verify engine is ready")
 		s.ExpectEngineReady(ns, "engine")
-		s.ExpectEngineGateways(ns, "engine", nil)
 	})
 
 	// -------------------------------------------------------------------------
-	// Sub-test: One matching Gateway
+	// Sub-test: Single Gateway with WAF enforcement
 	// -------------------------------------------------------------------------
 
-	t.Run("one_matching_gateway", func(t *testing.T) {
+	t.Run("single_gateway", func(t *testing.T) {
 		t.Parallel()
 		s := fw.NewScenario(t)
 
-		ns := s.GenerateNamespace("gw-status-1")
+		ns := s.GenerateNamespace("gw-target-1")
 
 		s.Step("create rules")
 		s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
@@ -79,9 +78,8 @@ func TestEngineGatewayStatus(t *testing.T) {
 			GatewayName: "gw",
 		})
 
-		s.Step("verify engine has one gateway in status")
+		s.Step("verify engine is ready")
 		s.ExpectEngineReady(ns, "engine")
-		s.ExpectEngineGateways(ns, "engine", []string{"gw"})
 
 		s.Step("verify WAF enforcement")
 		s.CreateEchoBackend(ns, "echo")
@@ -92,14 +90,14 @@ func TestEngineGatewayStatus(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
-	// Sub-test: Three matching Gateways
+	// Sub-test: Three Gateways, one Engine each
 	// -------------------------------------------------------------------------
 
-	t.Run("three_matching_gateways", func(t *testing.T) {
+	t.Run("three_gateways_one_engine_each", func(t *testing.T) {
 		t.Parallel()
 		s := fw.NewScenario(t)
 
-		ns := s.GenerateNamespace("gw-status-3")
+		ns := s.GenerateNamespace("gw-target-3")
 		gwCount := 3
 
 		s.Step("create rules")
@@ -109,23 +107,22 @@ func TestEngineGatewayStatus(t *testing.T) {
 		)
 		s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
 
-		s.Step("create gateways")
+		s.Step("create gateways and engines")
 		gwNames := make([]string, gwCount)
 		for i := range gwCount {
 			gwNames[i] = fmt.Sprintf("gw-%d", i+1)
 			s.CreateGateway(ns, gwNames[i])
 			s.ExpectGatewayProgrammed(ns, gwNames[i])
+			s.CreateEngine(ns, fmt.Sprintf("engine-%d", i+1), framework.EngineOpts{
+				RuleSetName: "ruleset",
+				GatewayName: gwNames[i],
+			})
 		}
 
-		s.Step("create engine targeting all gateways")
-		s.CreateEngine(ns, "engine", framework.EngineOpts{
-			RuleSetName:  "ruleset",
-			GatewayNames: gwNames,
-		})
-
-		s.Step("verify engine has all gateways in status")
-		s.ExpectEngineReady(ns, "engine")
-		s.ExpectEngineGateways(ns, "engine", gwNames)
+		s.Step("verify each engine is ready")
+		for i := range gwNames {
+			s.ExpectEngineReady(ns, fmt.Sprintf("engine-%d", i+1))
+		}
 
 		s.Step("deploy echo backend and verify WAF on all gateways")
 		s.CreateEchoBackend(ns, "echo")
