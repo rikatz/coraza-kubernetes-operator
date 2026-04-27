@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -31,145 +30,159 @@ func TestEngineMatchesLabels(t *testing.T) {
 		"gateway.networking.k8s.io/gateway-name": "my-gw",
 	}
 
-	t.Run("nil driver returns false", func(t *testing.T) {
+	t.Run("empty targetRef returns false", func(t *testing.T) {
 		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: nil},
+			Spec: wafv1alpha1.EngineSpec{},
 		}
 		assert.False(t, engineMatchesLabels(engine, podLabels))
 	})
 
-	t.Run("nil istio returns false", func(t *testing.T) {
+	t.Run("empty target name returns false", func(t *testing.T) {
 		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{Istio: nil}},
-		}
-		assert.False(t, engineMatchesLabels(engine, podLabels))
-	})
-
-	t.Run("nil wasm returns false", func(t *testing.T) {
-		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{Wasm: nil},
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "",
 			}},
 		}
 		assert.False(t, engineMatchesLabels(engine, podLabels))
 	})
 
-	t.Run("nil workload selector returns false", func(t *testing.T) {
+	t.Run("matching gateway name returns true", func(t *testing.T) {
 		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{WorkloadSelector: nil},
-				},
-			}},
-		}
-		assert.False(t, engineMatchesLabels(engine, podLabels))
-	})
-
-	t.Run("matching labels returns true", func(t *testing.T) {
-		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{
-						WorkloadSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{"app": "gateway"},
-						},
-					},
-				},
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "my-gw",
 			}},
 		}
 		assert.True(t, engineMatchesLabels(engine, podLabels))
 	})
 
-	t.Run("non-matching labels returns false", func(t *testing.T) {
+	t.Run("non-matching gateway name returns false", func(t *testing.T) {
 		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{
-						WorkloadSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{"app": "other"},
-						},
-					},
-				},
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "other-gw",
 			}},
 		}
 		assert.False(t, engineMatchesLabels(engine, podLabels))
 	})
 
-	t.Run("subset of pod labels still matches", func(t *testing.T) {
+	t.Run("nil pod labels returns false", func(t *testing.T) {
 		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{
-						WorkloadSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{
-								"app":                                    "gateway",
-								"gateway.networking.k8s.io/gateway-name": "my-gw",
-							},
-						},
-					},
-				},
-			}},
-		}
-		assert.True(t, engineMatchesLabels(engine, podLabels))
-	})
-
-	t.Run("selector requires label pod does not have", func(t *testing.T) {
-		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{
-						WorkloadSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{"app": "gateway", "extra": "label"},
-						},
-					},
-				},
-			}},
-		}
-		assert.False(t, engineMatchesLabels(engine, podLabels))
-	})
-
-	t.Run("empty selector matches everything", func(t *testing.T) {
-		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{
-						WorkloadSelector: &metav1.LabelSelector{},
-					},
-				},
-			}},
-		}
-		assert.True(t, engineMatchesLabels(engine, podLabels))
-	})
-
-	t.Run("nil pod labels with non-empty selector returns false", func(t *testing.T) {
-		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{
-						WorkloadSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{"app": "gateway"},
-						},
-					},
-				},
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "my-gw",
 			}},
 		}
 		assert.False(t, engineMatchesLabels(engine, nil))
 	})
 
-	t.Run("matchExpressions selector works", func(t *testing.T) {
+	t.Run("pod without gateway label returns false", func(t *testing.T) {
 		engine := &wafv1alpha1.Engine{
-			Spec: wafv1alpha1.EngineSpec{Driver: &wafv1alpha1.DriverConfig{
-				Istio: &wafv1alpha1.IstioDriverConfig{
-					Wasm: &wafv1alpha1.IstioWasmConfig{
-						WorkloadSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{
-								{Key: "app", Operator: metav1.LabelSelectorOpIn, Values: []string{"gateway", "proxy"}},
-							},
-						},
-					},
-				},
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "my-gw",
 			}},
 		}
-		assert.True(t, engineMatchesLabels(engine, podLabels))
+		assert.False(t, engineMatchesLabels(engine, map[string]string{"app": "gateway"}))
+	})
+}
+
+// TestTargetLabelSelector_SecurityRegressions verifies the runtime guard in
+// targetLabelSelector rejects names that would produce unmatchable label
+// selectors (silent WAF bypass).
+func TestTargetLabelSelector_SecurityRegressions(t *testing.T) {
+	t.Run("name exceeding 63 chars returns nil selector", func(t *testing.T) {
+		engine := &wafv1alpha1.Engine{
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "a234567890123456789012345678901234567890123456789012345678901234",
+			}},
+		}
+		assert.Nil(t, targetLabelSelector(engine),
+			"names longer than 63 chars must be rejected to prevent silent WAF bypass")
+	})
+
+	t.Run("name with spaces returns nil selector", func(t *testing.T) {
+		engine := &wafv1alpha1.Engine{
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "my gateway",
+			}},
+		}
+		assert.Nil(t, targetLabelSelector(engine),
+			"names with spaces are invalid label values and must be rejected")
+	})
+
+	t.Run("name starting with hyphen returns nil selector", func(t *testing.T) {
+		engine := &wafv1alpha1.Engine{
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "-invalid-start",
+			}},
+		}
+		assert.Nil(t, targetLabelSelector(engine),
+			"names starting with hyphen are invalid label values")
+	})
+
+	t.Run("valid label value returns non-nil selector", func(t *testing.T) {
+		engine := &wafv1alpha1.Engine{
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "my-gw-123",
+			}},
+		}
+		sel := targetLabelSelector(engine)
+		assert.NotNil(t, sel)
+		assert.Equal(t, "my-gw-123", sel.MatchLabels["gateway.networking.k8s.io/gateway-name"])
+	})
+
+	t.Run("single letter name is valid", func(t *testing.T) {
+		engine := &wafv1alpha1.Engine{
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "a",
+			}},
+		}
+		sel := targetLabelSelector(engine)
+		assert.NotNil(t, sel)
+		assert.Equal(t, "a", sel.MatchLabels["gateway.networking.k8s.io/gateway-name"])
+	})
+
+	t.Run("name starting with digit returns nil selector", func(t *testing.T) {
+		engine := &wafv1alpha1.Engine{
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "123-gw",
+			}},
+		}
+		assert.Nil(t, targetLabelSelector(engine),
+			"DNS-1035 labels must start with a letter")
+	})
+
+	t.Run("dotted name returns nil selector", func(t *testing.T) {
+		engine := &wafv1alpha1.Engine{
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "my.gateway",
+			}},
+		}
+		assert.Nil(t, targetLabelSelector(engine),
+			"dots are not allowed in DNS-1035 labels")
+	})
+
+	t.Run("uppercase name returns nil selector", func(t *testing.T) {
+		engine := &wafv1alpha1.Engine{
+			Spec: wafv1alpha1.EngineSpec{Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: "My-Gateway",
+			}},
+		}
+		assert.Nil(t, targetLabelSelector(engine),
+			"uppercase is not allowed in DNS-1035 labels")
+	})
+
+	t.Run("nil engine returns nil selector", func(t *testing.T) {
+		assert.Nil(t, targetLabelSelector(nil))
 	})
 }

@@ -159,14 +159,10 @@ func TestEngineRecreateAfterGateway(t *testing.T) {
 		GatewayName: "gw",
 	})
 	s.ExpectEngineReady(ns, "engine")
-	s.ExpectEngineGateways(ns, "engine", nil) // No gateways yet
 
 	s.Step("create gateway after engine")
 	s.CreateGateway(ns, "gw")
 	s.ExpectGatewayProgrammed(ns, "gw")
-
-	s.Step("verify engine discovers the gateway")
-	s.ExpectEngineGateways(ns, "engine", []string{"gw"})
 
 	s.Step("deploy backend")
 	s.CreateEchoBackend(ns, "echo")

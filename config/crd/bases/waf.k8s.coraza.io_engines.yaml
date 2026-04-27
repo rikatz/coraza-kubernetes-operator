@@ -18,6 +18,12 @@ spec:
     - jsonPath: .spec.ruleSet.name
       name: RuleSet
       type: string
+    - jsonPath: .spec.target.type
+      name: Target Type
+      type: string
+    - jsonPath: .spec.target.name
+      name: Target Name
+      type: string
     - jsonPath: .spec.failurePolicy
       name: Failure Policy
       type: string
@@ -55,138 +61,50 @@ spec:
             properties:
               driver:
                 description: |-
-                  driver specifies the driver configuration for the engine. This
-                  determines how the WAF engine will be deployed and integrated with some
-                  implementation. Currently only supports Istio ingress Gateways.
+                  driver configures the mechanism used to deploy the WAF filter into the
+                  target workload. When omitted, the operator uses a default driver for the
+                  underlying Engine (eg.: WASM for Istio)
                 minProperties: 0
                 properties:
-                  istio:
-                    description: istio configures the Engine to integrate with Istio
-                      service mesh.
+                  type:
+                    description: type selects the driver mechanism used to deploy
+                      the WAF filter.
+                    enum:
+                    - wasm
+                    type: string
+                  wasm:
+                    description: wasm contains configuration specific to the WASM
+                      driver.
                     minProperties: 0
                     properties:
-                      wasm:
-                        description: wasm configures the Engine to be deployed as
-                          a WebAssembly plugin.
-                        minProperties: 0
-                        properties:
-                          image:
-                            description: |-
-                              image is the OCI image reference for the Coraza WASM plugin.
-                              If omitted the operator uses its configured default WASM OCI reference
-                              (--default-wasm-image / CORAZA_DEFAULT_WASM_IMAGE).
-                            maxLength: 1024
-                            minLength: 1
-                            type: string
-                          imagePullSecret:
-                            description: |-
-                              imagePullSecret is the name of a Kubernetes Secret in the same namespace
-                              as the Engine that contains Docker registry credentials for pulling the
-                              WASM OCI image. This is passed directly to the Istio WasmPlugin resource.
-                            maxLength: 253
-                            minLength: 1
-                            type: string
-                          mode:
-                            default: gateway
-                            description: |-
-                              mode specifies what mechanism will be used to integrate the WAF with
-                              Istio.
-
-                              Currently only supports "Gateway" mode, utilizing Gateway API resources.
-                            enum:
-                            - gateway
-                            type: string
-                          ruleSetCacheServer:
-                            description: |-
-                              ruleSetCacheServer contains configuration for the ruleset cache server.
-
-                              When omitted, no cache server will be used and no rulesets will be
-                              dynamically loaded. This implies that your Engine will be deployed with
-                              all rules statically embedded.
-                            minProperties: 0
-                            properties:
-                              pollIntervalSeconds:
-                                default: 15
-                                description: |-
-                                  pollIntervalSeconds specifies how often the WAF should check for
-                                  configuration updates. The value is specified in seconds.
-
-                                  When omitted, this means the user has no opinion and the platform
-                                  will choose a reasonable default, which is subject to change over time.
-                                  The current default is 15 seconds.
-                                format: int32
-                                maximum: 3600
-                                minimum: 1
-                                type: integer
-                            type: object
-                          workloadSelector:
-                            description: |-
-                              workloadSelector specifies the selection criteria for attaching the WAF to
-                              Istio resources.
-
-                              Required when mode is "gateway".
-                            properties:
-                              matchExpressions:
-                                description: matchExpressions is a list of label selector
-                                  requirements. The requirements are ANDed.
-                                items:
-                                  description: |-
-                                    A label selector requirement is a selector that contains values, a key, and an operator that
-                                    relates the key and values.
-                                  properties:
-                                    key:
-                                      description: key is the label key that the selector
-                                        applies to.
-                                      type: string
-                                    operator:
-                                      description: |-
-                                        operator represents a key's relationship to a set of values.
-                                        Valid operators are In, NotIn, Exists and DoesNotExist.
-                                      type: string
-                                    values:
-                                      description: |-
-                                        values is an array of string values. If the operator is In or NotIn,
-                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
-                                        the values array must be empty. This array is replaced during a strategic
-                                        merge patch.
-                                      items:
-                                        type: string
-                                      type: array
-                                      x-kubernetes-list-type: atomic
-                                  required:
-                                  - key
-                                  - operator
-                                  type: object
-                                type: array
-                                x-kubernetes-list-type: atomic
-                              matchLabels:
-                                additionalProperties:
-                                  type: string
-                                description: |-
-                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
-                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
-                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
-                                type: object
-                            type: object
-                            x-kubernetes-map-type: atomic
-                        type: object
-                        x-kubernetes-validations:
-                        - message: workloadSelector is required when mode is gateway
-                          rule: 'self.mode == ''gateway'' ? has(self.workloadSelector)
-                            : true'
-                        - message: image must start with oci:// when set
-                          rule: '!has(self.image) || self.image.matches(''^oci://'')'
-                        - message: image must be at most 1024 characters when set
-                          rule: '!has(self.image) || size(self.image) <= 1024'
+                      image:
+                        description: |-
+                          image is the OCI image reference for the Coraza WASM plugin.
+                          If omitted the operator uses its configured default WASM OCI reference
+                          (--default-wasm-image / CORAZA_DEFAULT_WASM_IMAGE).
+                        maxLength: 1024
+                        minLength: 1
+                        type: string
+                      imagePullSecret:
+                        description: |-
+                          imagePullSecret is the name of a Kubernetes Secret in the same namespace
+                          as the Engine that contains Docker registry credentials for pulling the
+                          WASM OCI image.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
                     type: object
                     x-kubernetes-validations:
-                    - message: exactly one integration mechanism (Wasm, etc) must
-                        be specified
-                      rule: '[has(self.wasm)].filter(x, x).size() == 1'
+                    - message: image must start with oci:// when set
+                      rule: '!has(self.image) || self.image.matches(''^oci://'')'
+                    - message: image must be at most 1024 characters when set
+                      rule: '!has(self.image) || size(self.image) <= 1024'
+                required:
+                - type
                 type: object
                 x-kubernetes-validations:
-                - message: exactly one driver must be specified
-                  rule: '[has(self.istio)].filter(x, x).size() == 1'
+                - message: wasm config is required when type is wasm
+                  rule: 'self.type == ''wasm'' ? has(self.wasm) : true'
               failurePolicy:
                 default: fail
                 description: |-
@@ -219,12 +137,73 @@ spec:
                 required:
                 - name
                 type: object
+              ruleSetCacheServer:
+                description: |-
+                  ruleSetCacheServer contains configuration for the ruleset cache server.
+
+                  When omitted, no cache server will be used and no rulesets will be
+                  dynamically loaded. This implies that your Engine will be deployed with
+                  all rules statically embedded.
+                minProperties: 0
+                properties:
+                  pollIntervalSeconds:
+                    default: 15
+                    description: |-
+                      pollIntervalSeconds specifies how often the WAF should check for
+                      configuration updates. The value is specified in seconds.
+
+                      When omitted, this means the user has no opinion and the platform
+                      will choose a reasonable default, which is subject to change over time.
+                      The current default is 15 seconds.
+                    format: int32
+                    maximum: 3600
+                    minimum: 1
+                    type: integer
+                type: object
+              target:
+                description: |-
+                  target identifies the workload that the Engine protects. The operator
+                  derives the workload selector from this reference (e.g., for Gateway
+                  targets, the GEP-1762 gateway-name label is used).
+                properties:
+                  name:
+                    description: |-
+                      name is the name of the target resource in the same namespace as the
+                      Engine. For Gateway targets, the operator derives the workload selector
+                      from this name using the GEP-1762 convention
+                      (gateway.networking.k8s.io/gateway-name label).
+
+                      Must conform to RFC 1035 label syntax: lowercase alphanumeric or
+                      hyphens, must start with a letter and end with an alphanumeric
+                      (e.g. "my-gateway", "gw1"). This matches Kubernetes Service naming
+                      rules and ensures compatibility with Gateway implementations that
+                      derive Service names from the Gateway name.
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: name must be a valid DNS-1035 label (lowercase, starts
+                        with a letter)
+                      rule: '!format.dns1035Label().validate(self).hasValue()'
+                  type:
+                    description: |-
+                      type is the type of resource being targeted.
+
+                      Currently only supports "Gateway" mode, utilizing Gateway API resources.
+                    enum:
+                    - Gateway
+                    type: string
+                required:
+                - name
+                - type
+                type: object
+                x-kubernetes-validations:
+                - message: name is required when type is Gateway
+                  rule: 'self.type == ''Gateway'' ? has(self.name) : true'
             required:
             - ruleSet
+            - target
             type: object
-            x-kubernetes-validations:
-            - message: driver is required
-              rule: has(self.driver)
           status:
             description: status defines the observed state of Engine.
             minProperties: 0
@@ -300,30 +279,6 @@ spec:
                 type: array
                 x-kubernetes-list-map-keys:
                 - type
-                x-kubernetes-list-type: map
-              gateways:
-                description: |-
-                  gateways is the list of Gateways in the same namespace that match
-                  the Engine's workload selector.
-                items:
-                  description: |-
-                    GatewayReference is a reference to a Gateway resource in the same namespace
-                    as the Engine.
-                  properties:
-                    name:
-                      description: name is the name of the Gateway in the same namespace
-                        as the Engine.
-                      maxLength: 253
-                      minLength: 1
-                      type: string
-                  required:
-                  - name
-                  type: object
-                maxItems: 16
-                minItems: 1
-                type: array
-                x-kubernetes-list-map-keys:
-                - name
                 x-kubernetes-list-type: map
             type: object
         required:

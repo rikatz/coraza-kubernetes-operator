@@ -30,7 +30,7 @@ func (r *EngineReconciler) findEnginesForRuleSet(ctx context.Context, ruleSet cl
 }
 
 // findEnginesForGateway maps a Gateway to the Engines in the same namespace
-// that use an Istio Wasm driver.
+// that target this specific Gateway by name.
 func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway client.Object) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
@@ -41,7 +41,7 @@ func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway cl
 	}
 
 	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
-		return hasIstioWasmDriver(e)
+		return hasGatewayTarget(e) && e.Spec.Target.Name == gateway.GetName()
 	})
 }
 

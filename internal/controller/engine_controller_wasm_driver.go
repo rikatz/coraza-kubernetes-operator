@@ -19,16 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -51,20 +47,15 @@ import (
 const WasmPluginNamePrefix = "coraza-engine-"
 
 // -----------------------------------------------------------------------------
-// Engine Controller - Istio Driver - Provisioning
+// Engine Controller - WASM Driver - Provisioning
 // -----------------------------------------------------------------------------
 
-// provisionIstioEngineWithWasm provisions the Istio WasmPlugin resource for
-// the Engine.
-func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log logr.Logger, req ctrl.Request, engine wafv1alpha1.Engine) (ctrl.Result, error) {
-	// A nil WorkloadSelector would produce an empty Istio selector that matches
-	// all workloads — silently applying the WasmPlugin cluster-wide. CRD
-	// validation normally prevents this, but direct API writes or bypassed
-	// admission can reach here. Treat it as an invalid configuration rather
-	// than generating a broad selector.
-	if engine.Spec.Driver.Istio.Wasm.WorkloadSelector == nil {
-		err := fmt.Errorf("workloadSelector is required: a nil selector would match all workloads")
-		logError(log, req, "Engine", err, "Invalid Wasm configuration")
+// provisionWasmDriver provisions the Istio WasmPlugin resource for the Engine.
+func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine wafv1alpha1.Engine) (ctrl.Result, error) {
+	ws := targetLabelSelector(&engine)
+	if ws == nil {
+		err := fmt.Errorf("target is required: cannot derive workload selector")
+		logError(log, req, "Engine", err, "Invalid target configuration")
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "InvalidConfiguration", err.Error()); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
@@ -115,27 +106,10 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 		return ctrl.Result{}, err
 	}
 
-	logDebug(log, req, "Engine", "Finding matched Gateways")
-	gateways, gwErr := r.matchedGateways(ctx, log, req, &engine)
-	if gwErr != nil {
-		logAPIError(log, req, "Engine", gwErr, "Failed to find matched Gateways, not updating Gateway status", &engine)
-		r.Recorder.Eventf(&engine, nil, "Warning", "GatewayMatchFailed", "Reconcile", "%s", truncateEventNote(gwErr.Error()))
-	}
-
-	// Status patching is kept inline because it mutates engine.Status.Gateways
-	// between DeepCopy and Patch, which patchReady cannot accommodate.
 	logDebug(log, req, "Engine", "Updating status after successful provisioning")
-	patch := client.MergeFrom(engine.DeepCopy())
-	if gwErr == nil {
-		engine.Status.Gateways = gateways
+	if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated"); patchErr != nil {
+		return ctrl.Result{}, patchErr
 	}
-	before := snapshotConditions(engine.Status.Conditions)
-	applyStatusReady(&engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated")
-	if err := r.Status().Patch(ctx, &engine, patch); err != nil {
-		logAPIError(log, req, "Engine", err, "Failed to patch status", &engine)
-		return ctrl.Result{}, err
-	}
-	logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)
 	r.Recorder.Eventf(&engine, nil, "Normal", "WasmPluginCreated", "Provision", "Created WasmPlugin %s/%s", wasmPlugin.GetNamespace(), wasmPlugin.GetName())
 
 	// Schedule re-reconciliation at the token's renewal deadline. This is a
@@ -175,16 +149,12 @@ func (r *EngineReconciler) applyWasmPlugin(ctx context.Context, log logr.Logger,
 }
 
 // -----------------------------------------------------------------------------
-// Engine Controller - Istio Driver - WasmPlugin Builder
+// Engine Controller - WASM Driver - WasmPlugin Builder
 // -----------------------------------------------------------------------------
 
 func (r *EngineReconciler) wasmPluginOCIURLSource(engine *wafv1alpha1.Engine) (url string, fromSpec bool) {
-	if engine.Spec.Driver == nil || engine.Spec.Driver.Istio == nil || engine.Spec.Driver.Istio.Wasm == nil {
-		return r.defaultWasmImage, false
-	}
-	w := engine.Spec.Driver.Istio.Wasm
-	if w.Image != "" {
-		return w.Image, true
+	if engine.Spec.Driver.Wasm != nil && engine.Spec.Driver.Wasm.Image != "" {
+		return engine.Spec.Driver.Wasm.Image, true
 	}
 	return r.defaultWasmImage, false
 }
@@ -204,13 +174,14 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		"cache_token":           cacheToken,
 	}
 
-	if engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer != nil {
-		pluginConfig["rule_reload_interval_seconds"] = engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds
+	if engine.Spec.RuleSetCacheServer != nil {
+		pluginConfig["rule_reload_interval_seconds"] = engine.Spec.RuleSetCacheServer.PollIntervalSeconds
 	}
 
-	matchLabels := engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels
-	if matchLabels == nil {
-		matchLabels = map[string]string{}
+	ws := targetLabelSelector(engine)
+	matchLabels := map[string]string{}
+	if ws != nil && ws.MatchLabels != nil {
+		matchLabels = ws.MatchLabels
 	}
 
 	wasmPlugin := &unstructured.Unstructured{
@@ -231,9 +202,9 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		},
 	}
 
-	if engine.Spec.Driver.Istio.Wasm.ImagePullSecret != "" {
+	if engine.Spec.Driver.Wasm != nil && engine.Spec.Driver.Wasm.ImagePullSecret != "" {
 		spec := wasmPlugin.Object["spec"].(map[string]any)
-		spec["imagePullSecret"] = engine.Spec.Driver.Istio.Wasm.ImagePullSecret
+		spec["imagePullSecret"] = engine.Spec.Driver.Wasm.ImagePullSecret
 	}
 
 	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
@@ -255,46 +226,9 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 }
 
 // -----------------------------------------------------------------------------
-// Engine Controller - Istio Driver - Gateway Matching
+// Engine Controller - WASM Driver - Gateway Matching
 // -----------------------------------------------------------------------------
 
 // gatewayNameLabel is the well-known label that Istio applies to Gateway pods
 // to identify which Gateway resource they belong to.
 const gatewayNameLabel = "gateway.networking.k8s.io/gateway-name"
-
-// matchedGateways finds Gateways whose pods match the Engine's workload selector.
-// It lists pods matching the selector, then extracts unique Gateway names from
-// the well-known gateway-name label on each pod.
-func (r *EngineReconciler) matchedGateways(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) ([]wafv1alpha1.GatewayReference, error) {
-	if engine.Spec.Driver.Istio.Wasm.WorkloadSelector == nil {
-		logDebug(log, req, "Engine", "Empty workload selector for engine")
-		return nil, nil
-	}
-
-	selector, err := metav1.LabelSelectorAsSelector(engine.Spec.Driver.Istio.Wasm.WorkloadSelector)
-	if err != nil {
-		return nil, fmt.Errorf("invalid workload selector: %w", err)
-	}
-
-	var podList corev1.PodList
-	if err := r.List(ctx, &podList, client.InNamespace(engine.Namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
-		return nil, fmt.Errorf("failed to list pods: %w", err)
-	}
-
-	var names []string
-	for _, pod := range podList.Items {
-		if gwName := pod.Labels[gatewayNameLabel]; gwName != "" {
-			names = append(names, gwName)
-		}
-	}
-	slices.Sort(names)
-	names = slices.Compact(names)
-
-	gateways := make([]wafv1alpha1.GatewayReference, len(names))
-	for i, name := range names {
-		gateways[i] = wafv1alpha1.GatewayReference{Name: name}
-	}
-
-	logDebug(log, req, "Engine", "Matched Gateways", "count", len(gateways))
-	return gateways, nil
-}

@@ -86,3 +86,5 @@ catalog/bundles/
 # tool binaries
 tools/github_project_manager/github_project_manager
 /kubectl-coraza
+
+!design/**/*.md

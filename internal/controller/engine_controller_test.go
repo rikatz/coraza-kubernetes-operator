@@ -651,21 +651,29 @@ func TestEngineReconciler_HandleInvalidDriverConfiguration_NilStatus(t *testing.
 			Namespace: engine.Namespace,
 		},
 	}, engine)
-	require.Error(t, err, "should return an error for invalid driver configuration")
-	assert.Contains(t, err.Error(), "invalid driver configuration")
+	require.Error(t, err, "should return an error for unsupported driver type")
+	assert.Contains(t, err.Error(), "unsupported driver type")
 	assert.NotNil(t, engine.Status, "Status should be initialized after the call")
 }
 
-func TestEngineReconciler_SelectDriver_NilStatus(t *testing.T) {
+func TestEngineReconciler_SelectDriver_NilDriverDefaultsToWasm(t *testing.T) {
 	ctx := context.Background()
 
-	// Create and persist a valid engine so the status patch inside
-	// handleInvalidDriverConfiguration can talk to the API server.
-	// CRD validation blocks a nil driver, so create a valid resource first,
-	// then modify the fetched object in-memory before calling selectDriver directly.
-	validEngine := utils.NewTestEngine(utils.EngineOptions{
-		Name:      "selectdriver-nil-status",
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "selectdriver-ruleset",
 		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	validEngine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "selectdriver-nil-driver",
+		Namespace:   testNamespace,
+		RuleSetName: ruleset.Name,
 	})
 	require.NoError(t, k8sClient.Create(ctx, validEngine))
 	t.Cleanup(func() {
@@ -674,40 +682,42 @@ func TestEngineReconciler_SelectDriver_NilStatus(t *testing.T) {
 		}
 	})
 
-	// Fetch back the persisted engine and strip the driver + status.
+	// Fetch back and strip the driver — should default to wasm.
 	var fetched wafv1alpha1.Engine
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
 		Name:      validEngine.Name,
 		Namespace: validEngine.Namespace,
 	}, &fetched))
-	fetched.Spec.Driver = nil
-	fetched.Status = nil
+	fetched.Spec.Driver = wafv1alpha1.DriverConfig{}
+	if fetched.Status == nil {
+		fetched.Status = &wafv1alpha1.EngineStatus{}
+	}
 
 	reconciler := &EngineReconciler{
 		Client:                    k8sClient,
 		Scheme:                    scheme,
 		Recorder:                  utils.NewTestRecorder(),
+		kubeClient:                testKubeClient,
 		ruleSetCacheServerCluster: "test-cluster",
 		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
 		operatorNamespace:         testNamespace,
 	}
 
-	// selectDriver must not panic when Status is nil and driver is invalid.
+	// selectDriver with nil driver should default to wasm and not panic.
 	_, err := reconciler.selectDriver(ctx, ctrl.Log, ctrl.Request{
 		NamespacedName: types.NamespacedName{
 			Name:      fetched.Name,
 			Namespace: fetched.Namespace,
 		},
 	}, fetched)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid driver configuration")
+	require.NoError(t, err)
 }
 
-func TestEngineReconciler_NilWorkloadSelector_MarksDegraded(t *testing.T) {
+func TestEngineReconciler_NilTargetRef_MarksDegraded(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a valid engine so the status patch inside
-	// provisionIstioEngineWithWasm can talk to the API server.
+	// provisionWasmDriver can talk to the API server.
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:        "nil-ws-engine",
 		Namespace:   testNamespace,
@@ -735,22 +745,22 @@ func TestEngineReconciler_NilWorkloadSelector_MarksDegraded(t *testing.T) {
 		},
 	}
 
-	// Fetch the persisted engine and strip WorkloadSelector in-memory to
+	// Fetch the persisted engine and clear TargetRef in-memory to
 	// simulate bypassed CRD validation (e.g. direct API write). We cannot
 	// use k8sClient.Update because the CRD webhook rejects the change.
 	var fetched wafv1alpha1.Engine
 	require.NoError(t, k8sClient.Get(ctx, engineReq.NamespacedName, &fetched))
-	fetched.Spec.Driver.Istio.Wasm.WorkloadSelector = nil
+	fetched.Spec.Target = wafv1alpha1.EngineTarget{}
 	if fetched.Status == nil {
 		fetched.Status = &wafv1alpha1.EngineStatus{}
 	}
 
-	// Call provisionIstioEngineWithWasm directly — it should detect the nil
-	// WorkloadSelector and mark the Engine Degraded instead of creating a
+	// Call provisionWasmDriver directly — it should detect the empty
+	// TargetRef and mark the Engine Degraded instead of creating a
 	// WasmPlugin that matches all workloads.
-	_, err := reconciler.provisionIstioEngineWithWasm(ctx, ctrl.Log, engineReq, fetched)
+	_, err := reconciler.provisionWasmDriver(ctx, ctrl.Log, engineReq, fetched)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "workloadSelector is required")
+	assert.Contains(t, err.Error(), "target is required")
 
 	var updated wafv1alpha1.Engine
 	require.NoError(t, k8sClient.Get(ctx, engineReq.NamespacedName, &updated))
@@ -760,7 +770,7 @@ func TestEngineReconciler_NilWorkloadSelector_MarksDegraded(t *testing.T) {
 	require.NotNil(t, degradedCond, "Engine should have Degraded condition")
 	assert.Equal(t, metav1.ConditionTrue, degradedCond.Status)
 	assert.Equal(t, "InvalidConfiguration", degradedCond.Reason)
-	assert.Contains(t, degradedCond.Message, "workloadSelector is required")
+	assert.Contains(t, degradedCond.Message, "target is required")
 }
 
 func TestEngineReconciler_ValidationRejection(t *testing.T) {
@@ -783,28 +793,10 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			expectedError: "spec.ruleSet: Required value",
 		},
 		{
-			name: "no driver specified",
-			engineFunc: func() *wafv1alpha1.Engine {
-				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver = &wafv1alpha1.DriverConfig{}
-				return engine
-			},
-			expectedError: "exactly one driver must be specified",
-		},
-		{
-			name: "no istio integration mode specified",
-			engineFunc: func() *wafv1alpha1.Engine {
-				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Istio = &wafv1alpha1.IstioDriverConfig{}
-				return engine
-			},
-			expectedError: "exactly one integration mechanism (Wasm, etc) must be specified",
-		},
-		{
 			name: "image doesn't start with oci://",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Istio.Wasm.Image = "docker://invalid-image"
+				engine.Spec.Driver.Wasm.Image = "docker://invalid-image"
 				return engine
 			},
 			expectedError: "image must start with oci:// when set",
@@ -813,33 +805,83 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			name: "image too long",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Istio.Wasm.Image = "oci://" + string(make([]byte, 1100))
+				engine.Spec.Driver.Wasm.Image = "oci://" + string(make([]byte, 1100))
 				return engine
 			},
 			expectedError: "Too long: may not be more than 1024 bytes",
 		},
 		{
-			name: "gateway mode without workloadSelector",
+			name: "targetRef missing",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Istio.Wasm.Mode = wafv1alpha1.IstioIntegrationModeGateway
-				engine.Spec.Driver.Istio.Wasm.WorkloadSelector = nil
+				engine.Spec.Target = wafv1alpha1.EngineTarget{}
 				return engine
 			},
-			expectedError: "workloadSelector is required when mode is gateway",
+			expectedError: "spec.target: Required value",
+		},
+		{
+			name: "targetRef name exceeds label value limit (64 chars)",
+			engineFunc: func() *wafv1alpha1.Engine {
+				engine := utils.NewTestEngine(utils.EngineOptions{})
+				engine.Spec.Target.Name = "a234567890123456789012345678901234567890123456789012345678901234"
+				return engine
+			},
+			expectedError: "spec.target.name",
+		},
+		{
+			name: "target name with spaces rejected",
+			engineFunc: func() *wafv1alpha1.Engine {
+				engine := utils.NewTestEngine(utils.EngineOptions{})
+				engine.Spec.Target.Name = "my gateway"
+				return engine
+			},
+			expectedError: "spec.target.name",
+		},
+		{
+			name: "target name starting with hyphen rejected",
+			engineFunc: func() *wafv1alpha1.Engine {
+				engine := utils.NewTestEngine(utils.EngineOptions{})
+				engine.Spec.Target.Name = "-my-gw"
+				return engine
+			},
+			expectedError: "spec.target.name",
+		},
+		{
+			name: "target name with dots rejected",
+			engineFunc: func() *wafv1alpha1.Engine {
+				engine := utils.NewTestEngine(utils.EngineOptions{})
+				engine.Spec.Target.Name = "my.gateway"
+				return engine
+			},
+			expectedError: "name must be a valid DNS-1035 label",
+		},
+		{
+			name: "target name starting with digit rejected",
+			engineFunc: func() *wafv1alpha1.Engine {
+				engine := utils.NewTestEngine(utils.EngineOptions{})
+				engine.Spec.Target.Name = "123-gw"
+				return engine
+			},
+			expectedError: "name must be a valid DNS-1035 label",
 		},
 	}
 
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Logf("Attempting to create Engine with invalid configuration: %s", tt.name)
 			engine := tt.engineFunc()
 			engine.Name = fmt.Sprintf("validation-test-%d", i)
 			engine.Namespace = testNamespace
 
 			err := k8sClient.Create(ctx, engine)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.expectedError)
+			if tt.expectedError == "" {
+				require.NoError(t, err, "expected creation to succeed")
+				t.Cleanup(func() {
+					_ = k8sClient.Delete(ctx, engine)
+				})
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectedError)
+			}
 		})
 	}
 }
@@ -946,7 +988,7 @@ func TestEngineReconciler_ValidationAllowsOmittedWasmImage(t *testing.T) {
 		Name:      "omit-wasm-image",
 		Namespace: testNamespace,
 	})
-	engine.Spec.Driver.Istio.Wasm.Image = ""
+	engine.Spec.Driver.Wasm.Image = ""
 
 	err := k8sClient.Create(ctx, engine)
 	require.NoError(t, err)
@@ -962,7 +1004,7 @@ func TestEngineReconciler_BuildWasmPlugin_WasmImageResolution(t *testing.T) {
 
 	t.Run("nil image uses operator default", func(t *testing.T) {
 		engine := utils.NewTestEngine(utils.EngineOptions{})
-		engine.Spec.Driver.Istio.Wasm.Image = ""
+		engine.Spec.Driver.Wasm.Image = ""
 		r := &EngineReconciler{defaultWasmImage: operatorDefault}
 		wasmURL, _ := r.wasmPluginOCIURLSource(engine)
 		wp := r.buildWasmPlugin(engine, wasmURL, "")
@@ -977,7 +1019,7 @@ func TestEngineReconciler_BuildWasmPlugin_WasmImageResolution(t *testing.T) {
 
 	t.Run("nil wasm uses operator default", func(t *testing.T) {
 		engine := utils.NewTestEngine(utils.EngineOptions{})
-		engine.Spec.Driver.Istio.Wasm = nil
+		engine.Spec.Driver.Wasm = nil
 		r := &EngineReconciler{defaultWasmImage: operatorDefault}
 		wasmURL, _ := r.wasmPluginOCIURLSource(engine)
 		assert.Equal(t, operatorDefault, wasmURL)
@@ -986,7 +1028,7 @@ func TestEngineReconciler_BuildWasmPlugin_WasmImageResolution(t *testing.T) {
 	t.Run("explicit image wins over operator default", func(t *testing.T) {
 		custom := "oci://custom.example/wasm:v2"
 		engine := utils.NewTestEngine(utils.EngineOptions{})
-		engine.Spec.Driver.Istio.Wasm.Image = custom
+		engine.Spec.Driver.Wasm.Image = custom
 		r := &EngineReconciler{defaultWasmImage: operatorDefault}
 		wasmURL, _ := r.wasmPluginOCIURLSource(engine)
 		wp := r.buildWasmPlugin(engine, wasmURL, "")
@@ -1172,9 +1214,7 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 		Name:        "netpol-test-engine",
 		Namespace:   testNamespace,
 		RuleSetName: ruleset.Name,
-		WorkloadLabels: map[string]string{
-			"gateway.networking.k8s.io/gateway-name": "test-gw",
-		},
+		GatewayName: "test-gw",
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine))
 	t.Cleanup(func() {

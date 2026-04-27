@@ -11,14 +11,10 @@ import (
 // Engine Helpers
 // -----------------------------------------------------------------------------
 
-// engineMatchesLabels reports whether the Engine's workload selector matches
-// the given labels.
+// engineMatchesLabels reports whether the Engine's derived workload selector
+// matches the given labels.
 func engineMatchesLabels(engine *wafv1alpha1.Engine, podLabels map[string]string) bool {
-	if !hasIstioWasmDriver(engine) {
-		return false
-	}
-
-	ws := engine.Spec.Driver.Istio.Wasm.WorkloadSelector
+	ws := targetLabelSelector(engine)
 	if ws == nil {
 		return false
 	}
