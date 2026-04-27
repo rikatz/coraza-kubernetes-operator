@@ -48,11 +48,11 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 		ns := s.GenerateNamespace("multi-target")
 
 		s.Step("create shared rules")
-		s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-		s.CreateConfigMap(ns, "block-rules",
+		s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+		s.CreateRuleSource(ns, "block-rules",
 			framework.SimpleBlockRule(1001, "evil"),
 		)
-		s.CreateRuleSet(ns, "shared-rules", []string{"base-rules", "block-rules"})
+		s.CreateRuleSet(ns, "shared-rules", []string{"base-rules", "block-rules"}, nil)
 
 		s.Step("deploy shared echo backend")
 		s.CreateEchoBackend(ns, "echo")
@@ -99,15 +99,15 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 		s.ExpectGatewayProgrammed(ns, "target-gw")
 
 		s.Step("create two different rule sets")
-		s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-		s.CreateConfigMap(ns, "rules-a",
+		s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+		s.CreateRuleSource(ns, "rules-a",
 			framework.SimpleBlockRule(2001, "attackA"),
 		)
-		s.CreateConfigMap(ns, "rules-b",
+		s.CreateRuleSource(ns, "rules-b",
 			framework.SimpleBlockRule(2002, "attackB"),
 		)
-		s.CreateRuleSet(ns, "ruleset-a", []string{"base-rules", "rules-a"})
-		s.CreateRuleSet(ns, "ruleset-b", []string{"base-rules", "rules-b"})
+		s.CreateRuleSet(ns, "ruleset-a", []string{"base-rules", "rules-a"}, nil)
+		s.CreateRuleSet(ns, "ruleset-b", []string{"base-rules", "rules-b"}, nil)
 
 		s.Step("deploy echo backend")
 		s.CreateEchoBackend(ns, "echo")
@@ -149,8 +149,8 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 		ns := s.GenerateNamespace("no-target")
 
 		s.Step("create rules and engine targeting non-existent gateway")
-		s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-		s.CreateRuleSet(ns, "ruleset", []string{"base-rules"})
+		s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+		s.CreateRuleSet(ns, "ruleset", []string{"base-rules"}, nil)
 		s.CreateEngine(ns, "orphan-engine", framework.EngineOpts{
 			RuleSetName: "ruleset",
 			GatewayName: "nonexistent-gateway",

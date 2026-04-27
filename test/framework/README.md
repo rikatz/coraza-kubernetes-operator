@@ -49,9 +49,9 @@ func TestMyScenario(t *testing.T) {
     ns := s.GenerateNamespace("my-test")
 
     s.Step("create WAF resources")
-    s.CreateConfigMap(ns, "rules", `SecRuleEngine On
+    s.CreateRuleSource(ns, "rules", `SecRuleEngine On
 SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
-    s.CreateRuleSet(ns, "ruleset", []string{"rules"})
+    s.CreateRuleSet(ns, "ruleset", []string{"rules"}, nil)
     s.CreateGateway(ns, "my-gateway")
     s.ExpectGatewayProgrammed(ns, "my-gateway")
 
@@ -79,11 +79,12 @@ SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
 |---|---|
 | `GenerateNamespace(prefix)` | Create namespace with random suffix, returns generated name |
 | `CreateNamespace(name)` | Create namespace with exact name and cleanup |
-| `CreateConfigMap(ns, name, rules)` | Create ConfigMap with WAF rules |
+| `CreateRuleSource(ns, name, rules)` | Create RuleSource with WAF rules |
+| `CreateRuleData(ns, name, files)` | Create RuleData with data files |
 | `CreateGateway(ns, name)` | Create Istio Gateway with cleanup |
-| `CreateRuleSet(ns, name, configMapNames)` | Create RuleSet with cleanup |
+| `CreateRuleSet(ns, name, sourceNames, dataNames)` | Create RuleSet with cleanup |
 | `CreateEngine(ns, name, opts)` | Create Engine with cleanup |
-| `TryCreateRuleSet(ns, name, configMapNames)` | Create RuleSet, return error (for validation tests) |
+| `TryCreateRuleSet(ns, name, sourceNames, dataNames)` | Create RuleSet, return error (for validation tests) |
 | `TryCreateEngine(ns, name, opts)` | Create Engine, return error (for validation tests) |
 | `CreateHTTPRoute(ns, name, gw, backend)` | Create HTTPRoute with cleanup |
 | `CreateEchoBackend(ns, name)` | Deploy echo server (Deployment + Service), wait for Ready |
@@ -93,8 +94,8 @@ SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
 
 | Method | Purpose |
 |---|---|
-| `UpdateRuleSet(ns, name, configMapNames)` | Replace RuleSet's ConfigMap references |
-| `UpdateConfigMap(ns, name, rules)` | Replace ConfigMap rules data in-place |
+| `UpdateRuleSet(ns, name, sourceNames)` | Replace RuleSet's RuleSource references |
+| `UpdateRuleSource(ns, name, rules)` | Replace RuleSource rules data in-place |
 
 ### Scenario - Assertions
 
@@ -129,7 +130,7 @@ Exported builder functions for use outside scenarios:
 | Function | Purpose |
 |---|---|
 | `fw.BuildGateway(ns, name, class)` | Build unstructured Gateway (`ISTIO_GATEWAY_REVISION` sets `istio.io/rev` when non-empty) |
-| `BuildRuleSet(ns, name, rules)` | Build unstructured RuleSet |
+| `BuildRuleSet(ns, name, sources, data)` | Build unstructured RuleSet |
 | `BuildEngine(ns, name, opts)` | Build unstructured Engine |
 | `BuildHTTPRoute(ns, name, gw, backend)` | Build unstructured HTTPRoute |
 | `SimpleBlockRule(id, target)` | Generate a SecLang deny rule |
@@ -144,4 +145,4 @@ the v0.2.0 milestone validation issues:
 | `coreruleset_test.go` | [#12](https://github.com/networking-incubator/coraza-kubernetes-operator/issues/12) | CoreRuleSet-compatible rules (SQLi, XSS) |
 | `multiple_gateways_test.go` | [#13](https://github.com/networking-incubator/coraza-kubernetes-operator/issues/13) | RuleSets deployed to 3+ Gateways |
 | `multi_engine_gateway_test.go` | [#52](https://github.com/networking-incubator/coraza-kubernetes-operator/issues/52) | Multiple Engines + Multiple Gateways combos |
-| `reconcile_test.go` | — | Reconciliation loop: live RuleSet/ConfigMap mutations |
+| `reconcile_test.go` | — | Reconciliation loop: live RuleSet/RuleSource mutations |

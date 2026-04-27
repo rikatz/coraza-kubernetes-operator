@@ -39,13 +39,13 @@ func TestSQLInjectionPatterns(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy SQL injection detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout
 SecRequestBodyAccess On`)
 
 	// Comprehensive SQLi detection rules
-	s.CreateConfigMap(ns, "sqli-rules", `
+	s.CreateRuleSource(ns, "sqli-rules", `
 # Union-based SQLi
 SecRule ARGS "@rx (?i:union\s+(all\s+)?select)" "id:13001,phase:2,deny,status:403,msg:'Union-based SQLi',log,auditlog"
 
@@ -64,7 +64,7 @@ SecRule ARGS "@rx (?i:%27|%22|%3B|%2D%2D)" "id:13005,phase:2,deny,status:403,msg
 # Time-based blind SQLi
 SecRule ARGS "@rx (?i:(sleep|benchmark|waitfor)\s*\()" "id:13006,phase:2,deny,status:403,msg:'Time-based SQLi',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "sqli-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "sqli-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -121,12 +121,12 @@ func TestXSSPatterns(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy XSS detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout
 SecRequestBodyAccess On`)
 
-	s.CreateConfigMap(ns, "xss-rules", `
+	s.CreateRuleSource(ns, "xss-rules", `
 # Script tags
 SecRule ARGS "@rx (?i:<script[^>]*>)" "id:13101,phase:2,deny,status:403,msg:'Script tag XSS',log,auditlog"
 
@@ -148,7 +148,7 @@ SecRule ARGS "@rx (?i:<img[^>]*onerror)" "id:13106,phase:2,deny,status:403,msg:'
 # Iframe injection
 SecRule ARGS "@rx (?i:<iframe[^>]*>)" "id:13107,phase:2,deny,status:403,msg:'Iframe XSS',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "xss-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "xss-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -201,11 +201,11 @@ func TestPathTraversal(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy path traversal detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout`)
 
-	s.CreateConfigMap(ns, "traversal-rules", `
+	s.CreateRuleSource(ns, "traversal-rules", `
 # Basic path traversal
 SecRule REQUEST_URI|ARGS "@rx \.\.(\/|\\\\|%5[cC])" "id:13201,phase:1,deny,status:403,msg:'Path traversal',log,auditlog"
 
@@ -218,7 +218,7 @@ SecRule REQUEST_URI|ARGS "@rx %00" "id:13203,phase:1,deny,status:403,msg:'Null b
 # Sensitive file access
 SecRule REQUEST_URI "@rx (?i:(etc/passwd|etc/shadow|\.htaccess|web\.config|wp-config))" "id:13204,phase:1,deny,status:403,msg:'Sensitive file access',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "traversal-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "traversal-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -267,12 +267,12 @@ func TestCommandInjection(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy command injection detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout
 SecRequestBodyAccess On`)
 
-	s.CreateConfigMap(ns, "cmdi-rules", `
+	s.CreateRuleSource(ns, "cmdi-rules", `
 # Command separators
 SecRule ARGS "@rx [;|&`+"`"+`$]" "id:13301,phase:2,deny,status:403,msg:'Command separator',log,auditlog"
 
@@ -285,7 +285,7 @@ SecRule ARGS "@rx (?i:(cat|ls|id|whoami|uname|pwd|wget|curl|nc|netcat)\s)" "id:1
 # Reverse shell patterns
 SecRule ARGS "@rx (?i:(/bin/(ba)?sh|/dev/tcp|mkfifo))" "id:13304,phase:2,deny,status:403,msg:'Reverse shell',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "cmdi-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "cmdi-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -337,11 +337,11 @@ func TestProtocolAttacks(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy protocol attack detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout`)
 
-	s.CreateConfigMap(ns, "protocol-rules", `
+	s.CreateRuleSource(ns, "protocol-rules", `
 # HTTP response splitting
 SecRule ARGS "@rx (%0d%0a|%0d|%0a|\r\n|\r|\n)" "id:13401,phase:2,deny,status:403,msg:'HTTP response splitting',log,auditlog"
 
@@ -357,7 +357,7 @@ SecRule ARGS "@rx (?i:(127\.0\.0\.1|localhost|0\.0\.0\.0|169\.254\.))" "id:13404
 # File inclusion
 SecRule ARGS "@rx (?i:(file://|php://|expect://|data://text))" "id:13405,phase:2,deny,status:403,msg:'File inclusion',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "protocol-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "protocol-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",

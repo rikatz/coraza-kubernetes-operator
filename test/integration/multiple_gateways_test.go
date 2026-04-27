@@ -43,12 +43,12 @@ func TestMultipleGateways(t *testing.T) {
 
 	s.Step("create shared rules")
 
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules",
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules",
 		framework.SimpleBlockRule(1001, "blocked"),
 	)
 
-	s.CreateRuleSet(ns, "shared-ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "shared-ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	// -------------------------------------------------------------------------
 	// Step 2: Create gateways and engines

@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-A Kubernetes operator that manages Web Application Firewall (WAF) deployments using Coraza, integrated with Istio via WASM plugins. Two CRDs — **RuleSet** (aggregates SecLang rules from ConfigMaps) and **Engine** (attaches a RuleSet to a Gateway via Istio WasmPlugin).
+A Kubernetes operator that manages Web Application Firewall (WAF) deployments using Coraza, integrated with Istio via WASM plugins. CRDs include **RuleSource** (stores SecLang rule text), **RuleData** (stores data files for `@pmFromFile`), **RuleSet** (ordered `spec.sources` listing RuleSource names + optional `spec.data` listing RuleData names), and **Engine** (attaches a RuleSet to a Gateway via Istio WasmPlugin).
 
-Data flow: `ConfigMaps → RuleSetReconciler → RuleSetCache (HTTP server) → WASM plugin in Envoy → traffic filtering`
+Data flow: `RuleSources + RuleData + RuleSet → RuleSetReconciler → RuleSetCache (HTTP server) → WASM plugin in Envoy → traffic filtering`
 
 ## Build, test, and lint commands
 
@@ -49,7 +49,7 @@ make clean.cluster.kind     # Destroy it
 
 ### Two controllers, shared cache
 
-- **RuleSetReconciler** — watches RuleSet + referenced ConfigMaps/Secrets. Aggregates rules, validates via Coraza, checks for WASM-unsupported rules, stores in RuleSetCache.
+- **RuleSetReconciler** — watches RuleSet + referenced RuleSources + referenced RuleData (`get`/`list`/`watch` on `rulesources` and `ruledata` in its namespace only). Aggregates rules from RuleSources and data files from RuleData, validates via Coraza, checks for WASM-unsupported rules, stores in RuleSetCache.
 - **EngineReconciler** — watches Engine + referenced RuleSet + Gateways + Pods. When RuleSet is ready, applies a WasmPlugin resource (server-side apply) and discovers matched Gateway pods.
 
 Both are initialized in `internal/controller/manager.go` with a shared `RuleSetCache`.
@@ -64,7 +64,7 @@ When `--operator-name` is set, the manager creates a ServiceEntry + DestinationR
 
 ### Key directories
 
-- `api/v1alpha1/` — CRD types (Engine, RuleSet, DriverConfig)
+- `api/v1alpha1/` — CRD types (Engine, RuleSet, RuleSource, RuleData, DriverConfig)
 - `internal/controller/` — reconcilers and watch setup
 - `internal/rulesets/` — cache, memfs (virtual FS for rule validation), unsupported rule detection
 - `cmd/manager/` — operator entry point
@@ -156,5 +156,5 @@ s.Step("verify behavior")
 - `framework.DefaultTimeout` / `framework.DefaultInterval` — never hardcode durations
 
 ### Skip validation annotations
-- ConfigMaps: `coraza.io/validation: "false"` — skips per-ConfigMap rule validation
+- RuleSources: `coraza.io/validation: "false"` — skips per-source Coraza rule validation
 - RuleSets: `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` — prevents degrading on unsupported rules

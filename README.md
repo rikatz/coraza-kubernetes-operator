@@ -24,7 +24,9 @@ engines enforce.
 ### Key Features
 
 - `Engine` API - declaratively manage WAF instances
-- `RuleSet` API - declaratively manage firewall rules
+- `RuleSet` API - declaratively manage firewall rules (via ordered `RuleSource` and `RuleData` references)
+- `RuleSource` API - store SecLang rules consumed by a `RuleSet`
+- `RuleData` API - store data files (e.g. for `@pmFromFile`) consumed by a `RuleSet`
 - [ModSecurity Seclang] compatibility
 
 [ModSecurity Seclang]:https://github.com/owasp-modsecurity/ModSecurity/wiki/Reference-Manual-(v3.x)
@@ -48,9 +50,10 @@ their gateways/proxies:
 
 ### Architecture
 
-`RuleSet` resources aggregate rules (e.g. list of `ConfigMap` resources
-containing the [Seclang] rules) which when then get emitted to the `RuleSet`
-cache server.
+`RuleSet` resources list named `RuleSource` objects in `spec.sources` (order
+matters) for [Seclang] rule text, and optional `RuleData` objects in `spec.data`
+for data files used with `@pmFromFile`. The reconciler emits the merged result
+to the `RuleSet` cache server.
 
 > **Note**: Currently, only [Seclang] rules are supported.
 

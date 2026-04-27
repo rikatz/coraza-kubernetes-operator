@@ -1,0 +1,63 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: rulesources.waf.k8s.coraza.io
+spec:
+  group: waf.k8s.coraza.io
+  names:
+    kind: RuleSource
+    listKind: RuleSourceList
+    plural: rulesources
+    singular: rulesource
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: RuleSource holds SecLang WAF rule text for consumption by RuleSet
+          resources.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the rule content.
+            properties:
+              rules:
+                description: rules contains SecLang rule text.
+                maxLength: 1572864
+                minLength: 1
+                type: string
+            required:
+            - rules
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: rules must be set and non-empty
+          rule: has(self.spec.rules) && self.spec.rules != ""
+    served: true
+    storage: true
+    subresources: {}

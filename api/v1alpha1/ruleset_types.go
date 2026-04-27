@@ -33,9 +33,6 @@ func init() {
 // -----------------------------------------------------------------------------
 
 const (
-	// RuleDataSecretType is the expected type for a Secret that contains rule data files.
-	RuleDataSecretType = "coraza/data"
-
 	// AnnotationSkipUnsupportedRulesCheck is an annotation to disable the unsupported
 	// rules degradation on a RuleSet (it will still log).
 	AnnotationSkipUnsupportedRulesCheck = "waf.k8s.coraza.io/skip-unsupported-rules-check"
@@ -93,29 +90,25 @@ type RuleSetList struct {
 
 // RuleSetSpec defines the desired state of RuleSet.
 type RuleSetSpec struct {
-	// rules is an ordered list of references to ConfigMaps that contain the
-	// firewall rules to be compiled into a complete set.
-	//
-	// Each entry refers to a ConfigMap by name in the same namespace as
-	// the RuleSet. The ConfigMap must contain a "rules" key.
+	// sources is an ordered list of references to RuleSource objects in the
+	// same namespace as the RuleSet. Sources are concatenated in list order
+	// to form the aggregated SecLang string.
 	//
 	// +required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=2048
 	// +listType=atomic
-	Rules []RuleSourceReference `json:"rules,omitempty"`
+	Sources []SourceReference `json:"sources,omitempty"`
 
-	// ruleData contains the name of a secret with the required data for rules.
-	// Usually rules that contain the directive '@pmFromFile'.
-	// This secret must be created containing the type coraza/data otherwise it will
-	// not be watched.
-	// Additionally, the secret must contain the name of each file as the key, and the content
-	// of the file as the value
+	// data is an optional list of references to RuleData objects in the same
+	// namespace as the RuleSet. Data entries are merged to provide the
+	// filesystem for @pmFromFile directives (last-listed wins on duplicate keys).
 	//
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
 	// +optional
-	RuleData string `json:"ruleData,omitempty"`
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=256
+	// +listType=atomic
+	Data []DataReference `json:"data,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -143,9 +136,21 @@ type RuleSetCacheServerConfig struct {
 // RuleSet - References
 // -----------------------------------------------------------------------------
 
-// RuleSourceReference is a reference to a ConfigMap that contains WAF rules.
-type RuleSourceReference struct {
-	// name is the name of the ConfigMap in the same namespace as the RuleSet.
+// SourceReference is a reference to a RuleSource object in the same namespace
+// as the RuleSet.
+type SourceReference struct {
+	// name is the name of the RuleSource in the same namespace as the RuleSet.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name,omitempty"`
+}
+
+// DataReference is a reference to a RuleData object in the same namespace
+// as the RuleSet.
+type DataReference struct {
+	// name is the name of the RuleData in the same namespace as the RuleSet.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1

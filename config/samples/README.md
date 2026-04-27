@@ -7,8 +7,8 @@ Kubernetes Gateway API and Istio.
 
 | File | Description |
 |------|-------------|
-| `ruleset.yaml` | ConfigMaps with SecRule directives (base config, SQLi, XSS, custom) and a `RuleSet` CR that aggregates them |
-| `engine.yaml` | `Engine` CR that references the RuleSet and configures the Istio WASM driver (uses the operator's default WASM image) |
+| `ruleset.yaml` | `RuleSource` (SecLang rules), `RuleData` (`@pmFromFile` data files), and a `RuleSet` referencing them via `spec.sources` and `spec.data` |
+| `engine.yaml` | `Engine` CR that references the RuleSet and configures the Istio WASM driver (`spec.driver.istio.wasm.image` is optional; the sample sets it explicitly) |
 | `gateway.yaml` | Kubernetes Gateway API `Gateway` using the Istio gateway class |
 | `httproute.yaml` | `HTTPRoute` that sends all traffic through the gateway to the echo service |
 | `echo.yaml` | A simple echo Deployment and Service to act as the backend |

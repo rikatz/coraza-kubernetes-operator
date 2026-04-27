@@ -30,36 +30,31 @@ import (
 // RuleSet Controller - Watch Predicates
 // -----------------------------------------------------------------------------
 
-// findRuleSetsForConfigMap maps a ConfigMap to the RuleSets that reference it
-// via the "spec.rules.name" field index.
-func (r *RuleSetReconciler) findRuleSetsForConfigMap(ctx context.Context, configMap client.Object) []reconcile.Request {
-	log := logf.FromContext(ctx)
-
-	var ruleSetList wafv1alpha1.RuleSetList
-	if err := r.List(ctx, &ruleSetList,
-		client.InNamespace(configMap.GetNamespace()),
-		client.MatchingFields{"spec.rules.name": configMap.GetName()},
-	); err != nil {
-		log.Error(err, "RuleSet: Failed to list RuleSets by index", "namespace", configMap.GetNamespace())
-		return nil
-	}
-
-	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool { return true })
+// findRuleSetsForRuleSource maps a RuleSource to the RuleSets that reference it
+// using the spec.sources.name field index registered in SetupWithManager.
+func (r *RuleSetReconciler) findRuleSetsForRuleSource(ctx context.Context, ruleSource client.Object) []reconcile.Request {
+	return r.findRuleSetsBy(ctx, ruleSource.GetNamespace(), "spec.sources.name", ruleSource.GetName())
 }
 
-// findRuleSetsForSecret maps a Secret to the RuleSets that reference it
-// via the "spec.ruleData" field index.
-func (r *RuleSetReconciler) findRuleSetsForSecret(ctx context.Context, secret client.Object) []reconcile.Request {
+// findRuleSetsForRuleData maps a RuleData to the RuleSets that reference it
+// using the spec.data.name field index registered in SetupWithManager.
+func (r *RuleSetReconciler) findRuleSetsForRuleData(ctx context.Context, ruleData client.Object) []reconcile.Request {
+	return r.findRuleSetsBy(ctx, ruleData.GetNamespace(), "spec.data.name", ruleData.GetName())
+}
+
+// findRuleSetsBy lists RuleSets matching a field index value and returns
+// reconcile requests for each.
+func (r *RuleSetReconciler) findRuleSetsBy(ctx context.Context, namespace, indexKey, indexValue string) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
 	var ruleSetList wafv1alpha1.RuleSetList
 	if err := r.List(ctx, &ruleSetList,
-		client.InNamespace(secret.GetNamespace()),
-		client.MatchingFields{"spec.ruleData": secret.GetName()},
+		client.InNamespace(namespace),
+		client.MatchingFields{indexKey: indexValue},
 	); err != nil {
-		log.Error(err, "RuleSet: Failed to list RuleSets by index", "namespace", secret.GetNamespace())
+		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", namespace, "index", indexKey, "value", indexValue)
 		return nil
 	}
 
-	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool { return true })
+	return collectRequests(ruleSetList.Items, func(_ *wafv1alpha1.RuleSet) bool { return true })
 }

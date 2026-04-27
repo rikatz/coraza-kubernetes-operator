@@ -52,12 +52,12 @@ func TestE2E_BasicTraffic(t *testing.T) {
 
 	s.Step("deploy coraza rules")
 
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules",
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules",
 		framework.SimpleBlockRule(1234, "blocked"),
 	)
 
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	// -------------------------------------------------------------------------
 	// Step 3: Create Engine targeting the gateway

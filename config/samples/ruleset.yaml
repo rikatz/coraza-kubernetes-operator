@@ -1,8 +1,8 @@
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: base-rules
-data:
+spec:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
@@ -11,11 +11,11 @@ data:
     SecAuditLogFormat JSON
     SecAuditEngine RelevantOnly
 ---
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: sqli-rules
-data:
+spec:
   rules: |
     SecRule ARGS "@rx (?i:(\b(select|union|insert|update|delete|drop|create|alter|exec|execute)\b.*\b(from|into|where|table|database|procedure)\b)|(\b(or|and)\b\s*['\"]?\d+['\"]?\s*=\s*['\"]?\d+)|('.*or.*'.*=.*'))" \
       "id:1001,\
@@ -30,11 +30,11 @@ data:
       tag:'attack-sqli',\
       severity:'CRITICAL'"
 ---
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: xss-rules
-data:
+spec:
   rules: |
     SecRule ARGS "@rx (?i:<script[^>]*>.*?</script>|javascript:|onerror\s*=|onload\s*=|<iframe)" \
       "id:2001,\
@@ -49,11 +49,11 @@ data:
       tag:'attack-xss',\
       severity:'CRITICAL'"
 ---
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: no-evil-monkeys
-data:
+spec:
   rules: |
     SecRule ARGS|REQUEST_URI|REQUEST_HEADERS "@contains evilmonkey" \
       "id:3001,\
@@ -69,11 +69,11 @@ data:
       tag:'monkey-attack',\
       severity:'CRITICAL'"
 ---
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: no-evil-data
-data:
+spec:
   rules: |
     SecRule ARGS|REQUEST_URI|REQUEST_HEADERS "@pmFromFile some.data" \
       "id:3002,\
@@ -89,26 +89,26 @@ data:
       tag:'monkey-attack',\
       severity:'CRITICAL'"
 ---
-apiVersion: v1
-kind: Secret
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleData
 metadata:
   name: datafile
-type: coraza/data
-stringData:
-  some.data: |
-    evildata
-    anotherevildata
-
+spec:
+  files:
+    some.data: |
+      evildata
+      anotherevildata
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSet
 metadata:
   name: default-ruleset
 spec:
-  rules:
+  sources:
     - name: base-rules
     - name: sqli-rules
     - name: xss-rules
     - name: no-evil-monkeys
     - name: no-evil-data
-  ruleData: datafile
+  data:
+    - name: datafile
