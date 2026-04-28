@@ -50,19 +50,40 @@ _Appears in:_
 
 
 
-DriverConfig defines the driver configuration for the Engine.
+DriverConfig configures how the WAF filter is deployed into the target.
+When omitted from the Engine spec, the operator uses a default driver
+(currently wasm for Istio).
 
-Exactly one driver must be specified.
+Exactly one driver-specific configuration must match the selected type.
 
 _Validation:_
 - MinProperties: 0
+- wasm config is required when type is wasm
 
 _Appears in:_
 - [EngineSpec](#enginespec)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `istio` _[IstioDriverConfig](#istiodriverconfig)_ | istio configures the Engine to integrate with Istio service mesh. |  | MinProperties: 0 <br />Optional: \{\} <br /> |
+| `type` _[DriverType](#drivertype)_ | type selects the driver mechanism used to deploy the WAF filter. |  | Enum: [wasm] <br />Required: \{\} <br /> |
+| `wasm` _[WasmDriverConfig](#wasmdriverconfig)_ | wasm contains configuration specific to the WASM driver. |  | Optional: \{\} <br /> |
+
+
+### DriverType
+
+_Underlying type:_ _string_
+
+DriverType specifies the mechanism used to deploy the WAF filter.
+
+_Validation:_
+- Enum: [wasm]
+
+_Appears in:_
+- [DriverConfig](#driverconfig)
+
+| Value | Description |
+| --- | --- |
+| `wasm` | DriverTypeWasm deploys the WAF as a WebAssembly plugin.<br /> |
 
 
 ### Engine
@@ -109,7 +130,8 @@ EngineList contains a list of Engine resources.
 
 EngineSpec defines the desired state of an Engine.
 
-
+_Validation:_
+- driver type must be compatible with the target provider (Istio supports wasm)
 
 _Appears in:_
 - [Engine](#engine)
@@ -117,8 +139,10 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `ruleSet` _[RuleSetReference](#rulesetreference)_ | ruleSet specifies the RuleSet resource that will be used to load rules<br />into the Engine. The referenced RuleSet must be in the same namespace<br />as the Engine. |  | Required: \{\} <br /> |
-| `driver` _[DriverConfig](#driverconfig)_ | driver specifies the driver configuration for the engine. This<br />determines how the WAF engine will be deployed and integrated with some<br />implementation. Currently only supports Istio ingress Gateways. |  | MinProperties: 0 <br />Optional: \{\} <br /> |
+| `target` _[EngineTarget](#enginetarget)_ | target identifies the workload that the Engine protects. The operator<br />derives the workload selector from this reference (e.g., for Gateway<br />targets, the GEP-1762 gateway-name label is used). |  | Required: \{\} <br /> |
 | `failurePolicy` _[FailurePolicy](#failurepolicy)_ | failurePolicy determines the behavior when the WAF is not ready or<br />encounters errors. Valid values are:<br />- "Fail": Block traffic when the WAF is not ready or encounters errors<br />- "Allow": Allow traffic through when the WAF is not ready or encounters errors<br />When omitted, this means the user has no opinion and the platform<br />will choose a reasonable default, which is subject to change over time.<br />The current default is fail. | fail | Enum: [fail allow] <br />Optional: \{\} <br /> |
+| `ruleSetCacheServer` _[RuleSetCacheServerConfig](#rulesetcacheserverconfig)_ | ruleSetCacheServer contains configuration for the ruleset cache server.<br />When omitted, no cache server will be used and no rulesets will be<br />dynamically loaded. |  | MinProperties: 0 <br />Optional: \{\} <br /> |
+| `driver` _[DriverConfig](#driverconfig)_ | driver configures the mechanism used to deploy the WAF filter into the<br />target workload. When omitted, the operator uses a default driver for the<br />underlying Engine (eg.: WASM for Istio) |  | MinProperties: 0 <br />Optional: \{\} <br /> |
 
 
 ### EngineStatus
@@ -136,7 +160,62 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#condition-v1-meta) array_ | conditions represent the current state of the Engine resource.<br />Each condition has a unique type and reflects the status of a specific<br />aspect of the resource.<br />Standard condition types include:<br />- "Ready": the engine has been successfully deployed and is operational<br />- "Progressing": the resource is being created or updated<br />- "Degraded": the resource failed to reach or maintain its desired state<br />The status of each condition is one of True, False, or Unknown. |  | MaxItems: 16 <br />MinItems: 1 <br />Optional: \{\} <br /> |
-| `gateways` _[GatewayReference](#gatewayreference) array_ | gateways is the list of Gateways in the same namespace that match<br />the Engine's workload selector. |  | MaxItems: 16 <br />MinItems: 1 <br />Optional: \{\} <br /> |
+
+
+### EngineTarget
+
+
+
+EngineTarget identifies the workload that the Engine protects.
+
+_Validation:_
+- name is required when type is Gateway
+- provider "Istio" is only supported when target type is Gateway
+- provider is immutable after creation
+
+_Appears in:_
+- [EngineSpec](#enginespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `type` _[EngineTargetType](#enginetargettype)_ | type is the type of resource being targeted.<br />Currently only supports "Gateway" mode, utilizing Gateway API resources. |  | Enum: [Gateway] <br />Required: \{\} <br /> |
+| `name` _string_ | name is the name of the target resource in the same namespace as the<br />Engine. For Gateway targets, the operator derives the workload selector<br />from this name using the GEP-1762 convention<br />(gateway.networking.k8s.io/gateway-name label).<br />Must conform to RFC 1035 label syntax. |  | MaxLength: 63 <br />MinLength: 1 <br />Required: \{\} <br /> |
+| `provider` _[EngineTargetProvider](#enginetargetprovider)_ | provider identifies the infrastructure provider that manages the<br />target workload. The provider determines which driver types are<br />valid for the Engine.<br />This field is immutable after creation. To use a different provider,<br />create a new Engine resource.<br />Currently supported: "Istio" (supports "wasm" driver type).<br />Future providers may support different driver types (e.g., "EnvoyGateway"<br />will support "dynamicModule"). | Istio | Enum: [Istio] <br />Optional: \{\} <br /> |
+
+
+### EngineTargetType
+
+_Underlying type:_ _string_
+
+EngineTargetType specifies the type of resource an Engine targets.
+
+_Validation:_
+- Enum: [Gateway]
+
+_Appears in:_
+- [EngineTarget](#enginetarget)
+
+| Value | Description |
+| --- | --- |
+| `Gateway` | EngineTargetTypeGateway targets a Gateway API Gateway resource.<br /> |
+
+
+### EngineTargetProvider
+
+_Underlying type:_ _string_
+
+EngineTargetProvider identifies the infrastructure provider managing the
+target workload. Each provider supports a specific set of driver types.
+
+_Validation:_
+- Enum: [Istio]
+
+_Appears in:_
+- [EngineTarget](#enginetarget)
+
+| Value | Description |
+| --- | --- |
+| `Istio` | EngineTargetProviderIstio indicates the target is managed by Istio.<br />Supported driver types: "wasm".<br /> |
 
 
 ### FailurePolicy
@@ -157,81 +236,25 @@ _Appears in:_
 | `allow` | FailurePolicyAllow allows traffic through when the Engine is not ready or<br />encounters errors.<br /> |
 
 
-### GatewayReference
+### WasmDriverConfig
 
 
 
-GatewayReference is a reference to a Gateway resource in the same namespace
-as the Engine.
-
-
-
-_Appears in:_
-- [EngineStatus](#enginestatus)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `name` _string_ | name is the name of the Gateway in the same namespace as the Engine. |  | MaxLength: 253 <br />MinLength: 1 <br />Required: \{\} <br /> |
-
-
-### IstioDriverConfig
-
-
-
-IstioDriverConfig defines Istio-specific integration mechanisms that will be
-used to deploy and manage the Engine with Istio.
-
-Exactly one mode must be specified.
+WasmDriverConfig defines configuration for deploying the Engine as a WASM
+plugin.
 
 _Validation:_
 - MinProperties: 0
+- image must start with oci:// when set
+- image must be at most 1024 characters when set
 
 _Appears in:_
 - [DriverConfig](#driverconfig)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `wasm` _[IstioWasmConfig](#istiowasmconfig)_ | wasm configures the Engine to be deployed as a WebAssembly plugin. |  | MinProperties: 0 <br />Optional: \{\} <br /> |
-
-
-### IstioIntegrationMode
-
-_Underlying type:_ _string_
-
-IstioIntegrationMode specifies what mechanism will be used to integrate the
-WAF with Istio.
-
-_Validation:_
-- Enum: [gateway]
-
-_Appears in:_
-- [IstioWasmConfig](#istiowasmconfig)
-
-| Value | Description |
-| --- | --- |
-| `gateway` | IstioIntegrationModeGateway applies the filter at the Gateway level.<br /> |
-
-
-### IstioWasmConfig
-
-
-
-IstioWasmConfig defines configuration for deploying the Engine as a WASM
-plugin with Istio.
-
-_Validation:_
-- MinProperties: 0
-
-_Appears in:_
-- [IstioDriverConfig](#istiodriverconfig)
-
-| Field | Description | Default | Validation |
-| --- | --- | --- | --- |
-| `mode` _[IstioIntegrationMode](#istiointegrationmode)_ | mode specifies what mechanism will be used to integrate the WAF with<br />Istio.<br />Currently only supports "Gateway" mode, utilizing Gateway API resources. | gateway | Enum: [gateway] <br />Optional: \{\} <br /> |
-| `workloadSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#labelselector-v1-meta)_ | workloadSelector specifies the selection criteria for attaching the WAF to<br />Istio resources.<br />Required when mode is "gateway". |  | Optional: \{\} <br /> |
 | `image` _string_ | image is the OCI image reference for the Coraza WASM plugin.<br />If omitted the operator uses its configured default WASM OCI reference<br />(--default-wasm-image / CORAZA_DEFAULT_WASM_IMAGE). |  | MaxLength: 1024 <br />MinLength: 1 <br />Optional: \{\} <br /> |
-| `imagePullSecret` _string_ | imagePullSecret is the name of a Kubernetes Secret in the same namespace<br />as the Engine that contains Docker registry credentials for pulling the<br />WASM OCI image. This is passed directly to the Istio WasmPlugin resource. |  | MaxLength: 253 <br />MinLength: 1 <br />Optional: \{\} <br /> |
-| `ruleSetCacheServer` _[RuleSetCacheServerConfig](#rulesetcacheserverconfig)_ | ruleSetCacheServer contains configuration for the ruleset cache server.<br />When omitted, no cache server will be used and no rulesets will be<br />dynamically loaded. This implies that your Engine will be deployed with<br />all rules statically embedded. |  | MinProperties: 0 <br />Optional: \{\} <br /> |
+| `imagePullSecret` _string_ | imagePullSecret is the name of a Kubernetes Secret in the same namespace<br />as the Engine that contains Docker registry credentials for pulling the<br />WASM OCI image. |  | MaxLength: 253 <br />MinLength: 1 <br />Optional: \{\} <br /> |
 
 
 ### RuleData
@@ -318,7 +341,7 @@ _Validation:_
 - MinProperties: 0
 
 _Appears in:_
-- [IstioWasmConfig](#istiowasmconfig)
+- [EngineSpec](#enginespec)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
