@@ -51,8 +51,10 @@ type RuleSetEntries struct {
 
 // RuleSetCache provides thread-safe storage for rulesets with versioning
 type RuleSetCache struct {
-	mu      sync.RWMutex
-	entries map[string]*RuleSetEntries
+	mu           sync.RWMutex
+	entries      map[string]*RuleSetEntries
+	totalSize    int
+	totalEntries int
 }
 
 // NewRuleSetCache creates a new RuleSetCache instance
@@ -99,11 +101,13 @@ func (c *RuleSetCache) Put(instance string, rules string, datafiles map[string][
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Do a deepcopy on map to avoid race conditions in case someone access datafiles
-	// directly
-	internalData := make(map[string][]byte)
-	for f, v := range datafiles {
-		internalData[f] = bytes.Clone(v)
+	// Deep-copy to avoid races if the caller mutates the map after Put returns.
+	var internalData map[string][]byte
+	if len(datafiles) > 0 {
+		internalData = make(map[string][]byte, len(datafiles))
+		for f, v := range datafiles {
+			internalData[f] = bytes.Clone(v)
+		}
 	}
 
 	newEntry := &RuleSetEntry{
@@ -112,6 +116,7 @@ func (c *RuleSetCache) Put(instance string, rules string, datafiles map[string][
 		Rules:     rules,
 		DataFiles: internalData,
 	}
+	newEntrySize := entrySize(newEntry)
 
 	if c.entries[instance] == nil {
 		c.entries[instance] = &RuleSetEntries{
@@ -122,6 +127,8 @@ func (c *RuleSetCache) Put(instance string, rules string, datafiles map[string][
 		c.entries[instance].Entries = append(c.entries[instance].Entries, newEntry)
 		c.entries[instance].Latest = newEntry.UUID
 	}
+	c.totalSize += newEntrySize
+	c.totalEntries++
 }
 
 // Len returns the number of instances stored in the cache
@@ -146,29 +153,14 @@ func (c *RuleSetCache) ListKeys() []string {
 func (c *RuleSetCache) TotalSize() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	size := 0
-	for _, entries := range c.entries {
-		for _, entry := range entries.Entries {
-			size += len(entry.Rules)
-			for name, value := range entry.DataFiles {
-				size += len(name)
-				size += len(value)
-			}
-		}
-	}
-	return size
+	return c.totalSize
 }
 
-// SetEntryTimestamp updates the timestamp of an entry.
-func (c *RuleSetCache) SetEntryTimestamp(instance string, index int, timestamp time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if entries, ok := c.entries[instance]; ok {
-		if index >= 0 && index < len(entries.Entries) {
-			entries.Entries[index].Timestamp = timestamp
-		}
-	}
+// TotalEntries returns the total number of stored entry revisions across all cache keys.
+func (c *RuleSetCache) TotalEntries() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.totalEntries
 }
 
 // CountEntries returns the number of entries for an instance.
@@ -209,6 +201,8 @@ func (c *RuleSetCache) Prune(maxAge time.Duration) int {
 			if now.Sub(entry.Timestamp) <= maxAge {
 				newEntries = append(newEntries, entry)
 			} else {
+				c.totalSize -= entrySize(entry)
+				c.totalEntries--
 				pruned++
 			}
 		}
@@ -225,16 +219,7 @@ func (c *RuleSetCache) PruneBySize(maxSize int) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	currentSize := 0
-	for _, entries := range c.entries {
-		for _, entry := range entries.Entries {
-			currentSize += len(entry.Rules)
-			for filename, v := range entry.DataFiles {
-				currentSize += len(filename)
-				currentSize += len(v)
-			}
-		}
-	}
+	currentSize := c.totalSize
 
 	if currentSize <= maxSize {
 		return 0
@@ -257,11 +242,10 @@ func (c *RuleSetCache) PruneBySize(maxSize int) int {
 
 			// If we're still over size, prune.
 			if currentSize > maxSize {
-				currentSize -= len(entry.Rules)
-				for filename, v := range entry.DataFiles {
-					currentSize -= len(filename)
-					currentSize -= len(v)
-				}
+				removedSize := entrySize(entry)
+				currentSize -= removedSize
+				c.totalSize -= removedSize
+				c.totalEntries--
 				pruned++
 			} else {
 				// Under size now, keep the remainder.
@@ -272,4 +256,17 @@ func (c *RuleSetCache) PruneBySize(maxSize int) int {
 	}
 
 	return pruned
+}
+
+// entrySize computes the byte size of an entry's payload.
+// Incremental totalSize and totalEntries accounting in Put/Prune/PruneBySize
+// depends on entries being immutable after creation — never mutate Rules or
+// DataFiles on a stored entry.
+func entrySize(entry *RuleSetEntry) int {
+	size := len(entry.Rules)
+	for filename, v := range entry.DataFiles {
+		size += len(filename)
+		size += len(v)
+	}
+	return size
 }
