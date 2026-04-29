@@ -39,9 +39,9 @@ jobs:
         run: make build.image
 
       - name: save container image
-        run: docker save "${CONTROLLER_MANAGER_IMAGE}" -o /tmp/controller-image.tar
-        env:
-          CONTROLLER_MANAGER_IMAGE: ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.0.0-dev
+        run: |
+          IMAGE=$(make -s print-CONTROLLER_MANAGER_CONTAINER_IMAGE)
+          docker save "${IMAGE}" -o /tmp/controller-image.tar
 
       - name: upload container image artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

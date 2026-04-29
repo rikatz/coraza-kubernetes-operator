@@ -224,18 +224,18 @@ jobs:
           name: manifests
           path: dist/
 
+      # IMPORTANT: draft release — a maintainer must validate and publish manually.
+      # The chart .tgz is included here (not in a separate chart-releaser step)
+      # so that pages.yml can generate the Helm repo index directly from release
+      # assets using `cr index`, without needing a dedicated gh-pages branch.
       - name: create github release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
-          draft: true # IMPORTANT: our releases are immutable, so a maintainer needs to validate and do the final publish
-          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
-          # The chart .tgz is included here (not in a separate chart-releaser step)
-          # so that pages.yml can generate the Helm repo index directly from release
-          # assets using `cr index`, without needing a dedicated gh-pages branch.
-          files: |
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "${IS_PRERELEASE}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          ASSETS=(
             dist/crds.yaml
             dist/operator.yaml
             dist/samples.yaml
@@ -244,9 +244,27 @@ jobs:
             dist/kubectl-coraza-linux-arm64
             dist/kubectl-coraza-darwin-amd64
             dist/kubectl-coraza-darwin-arm64
-          fail_on_unmatched_files: true
+          )
+
+          for pattern in "${ASSETS[@]}"; do
+            # shellcheck disable=SC2086
+            if ! ls $pattern >/dev/null 2>&1; then
+              echo "::error::No files match pattern: ${pattern}"
+              exit 1
+            fi
+          done
+
+          gh release create "${TAG}" \
+            --draft \
+            --title "${TAG}" \
+            --generate-notes \
+            ${PRERELEASE_FLAG} \
+            "${ASSETS[@]}"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
 
   # Redeploy GitHub Pages so the Helm repo index picks up the newly published
   # chart .tgz from this release. pages.yml downloads all chart assets from

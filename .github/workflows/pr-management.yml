@@ -27,6 +27,10 @@ jobs:
               with:
                   go-version-file: tools/github_project_manager/go.mod
 
+            - name: Verify go module integrity
+              working-directory: tools/github_project_manager
+              run: go mod verify
+
             - name: Build project manager
               working-directory: tools/github_project_manager
               run: go build -o "${{ github.workspace }}/github_project_manager" .

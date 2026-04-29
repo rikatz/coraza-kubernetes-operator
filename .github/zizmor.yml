@@ -12,4 +12,5 @@ rules:
   cache-poisoning:
     ignore:
       - ci.yml
+      - codeql.yml
       - release.yml
