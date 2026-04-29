@@ -230,29 +230,47 @@ jobs:
       # assets using `cr index`, without needing a dedicated gh-pages branch.
       - name: create github release
         run: |
-          PRERELEASE_FLAG=""
-          if [ "${IS_PRERELEASE}" = "true" ]; then
-            PRERELEASE_FLAG="--prerelease"
+          # Idempotency: if a draft release already exists for this tag (e.g.
+          # from a previous partial run), delete it so we can recreate cleanly.
+          # Refuse to overwrite a published release.
+          RELEASE_STATE=$(gh release view "${TAG}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "none")
+          if [ "${RELEASE_STATE}" = "true" ]; then
+            echo "Deleting existing draft release for ${TAG} (re-run detected)"
+            gh release delete "${TAG}" --yes
+          elif [ "${RELEASE_STATE}" = "false" ]; then
+            echo "::error::A published release already exists for ${TAG}. Cannot overwrite."
+            exit 1
+          fi
+
+          # Expand the chart .tgz glob into concrete filenames.
+          CHART_TGZ=(dist/coraza-kubernetes-operator-*.tgz)
+          if [ ! -f "${CHART_TGZ[0]}" ]; then
+            echo "::error::No chart .tgz found in dist/"
+            exit 1
           fi
 
           ASSETS=(
             dist/crds.yaml
             dist/operator.yaml
             dist/samples.yaml
-            dist/coraza-kubernetes-operator-*.tgz
+            "${CHART_TGZ[@]}"
             dist/kubectl-coraza-linux-amd64
             dist/kubectl-coraza-linux-arm64
             dist/kubectl-coraza-darwin-amd64
             dist/kubectl-coraza-darwin-arm64
           )
 
-          for pattern in "${ASSETS[@]}"; do
-            # shellcheck disable=SC2086
-            if ! ls $pattern >/dev/null 2>&1; then
-              echo "::error::No files match pattern: ${pattern}"
+          for f in "${ASSETS[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Required release asset not found: ${f}"
               exit 1
             fi
           done
+
+          PRERELEASE_FLAG=""
+          if [ "${IS_PRERELEASE}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
 
           gh release create "${TAG}" \
             --draft \
