@@ -1,6 +1,7 @@
 name: Issue Management
 
-permissions: read-all
+permissions:
+  contents: read
 
 on:
   issues:
@@ -33,21 +34,25 @@ jobs:
       - name: Close declined issues
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO_OWNER: ${{ github.repository_owner }}
           GITHUB_EVENT_REPOSITORY_NAME: ${{ github.event.repository.name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           ./github_project_manager -v \
-            --owner "${{ github.repository_owner }}" \
+            --owner "${GITHUB_REPO_OWNER}" \
             --repo "${GITHUB_EVENT_REPOSITORY_NAME}" \
-            --issue "${{ github.event.issue.number }}" \
+            --issue "${ISSUE_NUMBER}" \
             close-declined
 
       - name: Update labels
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO_OWNER: ${{ github.repository_owner }}
           GITHUB_EVENT_REPOSITORY_NAME: ${{ github.event.repository.name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           ./github_project_manager -v \
-            --owner "${{ github.repository_owner }}" \
+            --owner "${GITHUB_REPO_OWNER}" \
             --repo "${GITHUB_EVENT_REPOSITORY_NAME}" \
-            --issue "${{ github.event.issue.number }}" \
+            --issue "${ISSUE_NUMBER}" \
             update-labels
