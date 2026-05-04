@@ -491,10 +491,15 @@ docs.api: docs.image ## Generate CRD API reference from Go types
 		&& chown $(shell id -u):$(shell id -g) $(DOCS_DIR)/content/reference/api.md'
 
 .PHONY: docs.build
-docs.build: docs.image docs.api ## Build documentation for production
-	$(CONTAINER_TOOL) run --rm \
-		-v $(CURDIR)/$(DOCS_DIR):/src:z $(DOCS_IMG) \
-		sh -c 'hugo --minify --baseURL "$(DOCS_BASE_URL)" && chown -R $(shell id -u):$(shell id -g) /src/public'
+docs.build: docs.image docs.api ## Build multi-version documentation for production
+	CONTAINER_TOOL=$(CONTAINER_TOOL) DOCS_IMG=$(DOCS_IMG) \
+		hack/build-versioned-docs.sh --base-url "$(DOCS_BASE_URL)"
+
+.PHONY: docs.serve.versioned
+docs.serve.versioned: ## Build and serve multi-version site via static file server
+	$(MAKE) DOCS_BASE_URL="http://localhost:1313" docs.build
+	@echo "Serving full multi-version site on http://localhost:1313/"
+	python3 -m http.server 1313 --directory docs/public
 
 CHROMA_LIGHT_STYLE ?= tango
 CHROMA_DARK_STYLE  ?= dracula
