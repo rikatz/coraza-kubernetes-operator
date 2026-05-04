@@ -49,6 +49,7 @@ dist/
 # documentation site (Hugo)
 !docs/**/*.md
 !docs/**/*.html
+docs/content/reference/api.md
 docs/public/
 docs/resources/
 

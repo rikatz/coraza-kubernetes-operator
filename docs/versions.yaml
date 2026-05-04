@@ -1,0 +1,13 @@
+# Each entry produces a docs subpath at /<name>/
+# ref: git tag to build from (HEAD = current working tree for dev)
+# display: label shown in the version dropdown
+# default: true = root path redirects here (exactly one entry)
+versions:
+  - name: v0.4
+    ref: v0.4.0
+    display: v0.4
+    default: true
+  - name: dev
+    ref: HEAD
+    display: dev
+    default: false

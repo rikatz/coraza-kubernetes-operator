@@ -1,0 +1,12 @@
+{{ if .Site.Params.archived_version -}}
+<div class="td-version-banner alert alert-warning text-center" role="alert">
+  {{ if eq .Site.Params.version "dev" -}}
+    <strong>Development version.</strong> This documentation is for unreleased features on the main branch.
+  {{ else -}}
+    <strong>Archived version.</strong> This is documentation for {{ .Site.Params.version }}.
+  {{ end -}}
+  {{ with .Site.Params.url_latest_version -}}
+    <a href="{{ . | safeURL }}">View the latest stable documentation.</a>
+  {{ end -}}
+</div>
+{{ end -}}
