@@ -25,16 +25,12 @@ jobs:
 
       - name: install yq
         run: |
-          set -o pipefail
-          YQ_VERSION="v4.47.1"
-          YQ_BINARY="yq_linux_amd64"
-          YQ_BASE_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}"
-          curl -fsSLo "${RUNNER_TEMP}/${YQ_BINARY}" "${YQ_BASE_URL}/${YQ_BINARY}"
-          curl -fsSLo "${RUNNER_TEMP}/checksums.txt" "${YQ_BASE_URL}/checksums"
-          grep -q "  ${YQ_BINARY}$" "${RUNNER_TEMP}/checksums.txt" \
-            || { echo "::error::checksum entry not found for ${YQ_BINARY}"; exit 1; }
-          (cd "${RUNNER_TEMP}" && grep "  ${YQ_BINARY}$" checksums.txt | sha256sum -c -)
-          install "${RUNNER_TEMP}/${YQ_BINARY}" "${RUNNER_TEMP}/yq"
+          YQ_VERSION="v4.53.2"
+          YQ_SHA256="d56bf5c6819e8e696340c312bd70f849dc1678a7cda9c2ad63eebd906371d56b"
+          curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
+            -o "${RUNNER_TEMP}/yq"
+          echo "${YQ_SHA256}  ${RUNNER_TEMP}/yq" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/yq"
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
 
       - name: build docs
