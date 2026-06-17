@@ -81,6 +81,14 @@ metrics:
     # Additional metricRelabelings appended AFTER the mandatory cardinality guard.
     # The guard (keep only coraza_waf_.*) is always enforced first.
     metricRelabelings: []
+  envoyStatsTags:
+    # When true, deploys an EnvoyFilter that merges stats_tags regexes required
+    # to extract coraza_waf_* Prometheus labels from Envoy stat names.
+    # Requires Istio and a gatewaySelector matching your Gateway workload pods.
+    enabled: false
+    # Label selector for Gateway pods (same convention as podMonitor.gatewaySelector).
+    gatewaySelector: {}
+    additionalLabels: {}
 
 logging:
   # When true, uses console encoder with debug level (development mode).
