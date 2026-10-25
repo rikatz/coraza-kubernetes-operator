@@ -86,11 +86,6 @@ var (
 		Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes",
 	}
 
-	// WasmPluginGVR is the GroupVersionResource for WasmPlugin resources.
-	WasmPluginGVR = schema.GroupVersionResource{
-		Group: "extensions.istio.io", Version: "v1alpha1", Resource: "wasmplugins",
-	}
-
 	// TelemetryGVR is the GroupVersionResource for Istio Telemetry resources.
 	TelemetryGVR = schema.GroupVersionResource{
 		Group: "telemetry.istio.io", Version: "v1", Resource: "telemetries",
