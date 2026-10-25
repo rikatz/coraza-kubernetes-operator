@@ -47,6 +47,7 @@ type serverStream struct {
 	identity     Identity
 	session      *StreamSession
 	resourceName string
+	engineKey    string
 }
 
 // Server serves ECDS with go-control-plane's SnapshotCache and stream handler.
@@ -197,6 +198,12 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		entry.session = session
 	}
 
+	// The client controls node.id. Keep the cache key pinned to the
+	// authorized Engine on every request, including ACKs/NACKs.
+	if entry.engineKey != "" && req.Node != nil {
+		req.Node.Id = entry.engineKey
+	}
+
 	if req.GetErrorDetail() != nil {
 		s.Metrics.Nack("rejected")
 		return nil
@@ -235,6 +242,7 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		}
 		req.Node.Id = engineKey
 		entry.resourceName = name
+		entry.engineKey = engineKey
 		s.Streams.SetResource(entry.session.ID, name)
 		return nil
 	}

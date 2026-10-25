@@ -205,7 +205,9 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 		t.Fatalf("response = %+v", first)
 	}
 
+	// A client-supplied node.id must not repoint the cache watch on ACK.
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		Node:          &corev3.Node{Id: "spoofed"},
 		ResourceNames: []string{fixture.resourceName},
 		VersionInfo:   first.GetVersionInfo(),
 		ResponseNonce: first.GetNonce(),
