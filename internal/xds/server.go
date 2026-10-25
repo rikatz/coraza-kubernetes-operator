@@ -21,12 +21,12 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	extensionconfigservice "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
 	xdsserver "github.com/envoyproxy/go-control-plane/pkg/server/v3"
-	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -54,29 +54,26 @@ type serverStream struct {
 // Authentication, authorization, revalidation, and stream lifecycle remain
 // CKO-owned.
 type Server struct {
-	Store   *SnapshotStore
 	Auth    *Authenticator
 	Authz   *AuthzIndex
 	Streams *StreamRegistry
 	Limits  Limits
 	Metrics *Metrics
-	Log     logr.Logger
 
 	srv xdsserver.Server
 
-	streams sync.Map // int64 -> *serverStream
+	streams     sync.Map // int64 -> *serverStream
+	openStreams atomic.Int64
 }
 
 // NewServer wires the go-control-plane server around the snapshot cache.
-func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, streams *StreamRegistry, limits Limits, metrics *Metrics, logger logr.Logger) *Server {
+func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, streams *StreamRegistry, limits Limits, metrics *Metrics) *Server {
 	s := &Server{
-		Store:   store,
 		Auth:    auth,
 		Authz:   authz,
 		Streams: streams,
-		Limits:  limits,
+		Limits:  limits.withDefaults(),
 		Metrics: metrics,
-		Log:     logger,
 	}
 	s.srv = xdsserver.NewServer(context.Background(), store.cache, xdsserver.CallbackFuncs{
 		StreamOpenFunc:    s.onStreamOpen,
@@ -91,6 +88,20 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	extensionconfigservice.RegisterExtensionConfigDiscoveryServiceServer(registrar, s.srv)
 }
 
+// lifecycleStatus maps a stream close cause to the bounded gRPC status
+// returned to the client, or nil when the cause is not lifecycle-owned.
+func lifecycleStatus(cause error) error {
+	switch cause {
+	case ErrRevoked:
+		return status.Error(codes.PermissionDenied, "resource is not authorized")
+	case ErrRevalidateFailed:
+		return status.Error(codes.Unauthenticated, "authentication failed")
+	case ErrLifetimeExpired, ErrServerShutdown:
+		return status.Error(codes.Unavailable, "stream must be re-established")
+	}
+	return nil
+}
+
 // StreamInterceptor supplies the cancelable stream context the revalidation
 // registry needs. go-control-plane has no public close-stream API.
 func (s *Server) StreamInterceptor() grpc.StreamServerInterceptor {
@@ -103,13 +114,8 @@ func (s *Server) StreamInterceptor() grpc.StreamServerInterceptor {
 		}
 		err := handler(srv, wrapped)
 		if ctx.Err() != nil {
-			switch context.Cause(ctx) {
-			case ErrRevoked:
-				return status.Error(codes.PermissionDenied, "resource is not authorized")
-			case ErrRevalidateFailed:
-				return status.Error(codes.Unauthenticated, "authentication failed")
-			case ErrLifetimeExpired, ErrServerShutdown:
-				return status.Error(codes.Unavailable, "stream must be re-established")
+			if mapped := lifecycleStatus(context.Cause(ctx)); mapped != nil {
+				return mapped
 			}
 		}
 		if err == nil {
@@ -121,13 +127,8 @@ func (s *Server) StreamInterceptor() grpc.StreamServerInterceptor {
 			return err
 		}
 		if ctx.Err() != nil {
-			switch context.Cause(ctx) {
-			case ErrRevoked:
-				return status.Error(codes.PermissionDenied, "resource is not authorized")
-			case ErrRevalidateFailed:
-				return status.Error(codes.Unauthenticated, "authentication failed")
-			case ErrLifetimeExpired, ErrServerShutdown:
-				return status.Error(codes.Unavailable, "stream must be re-established")
+			if mapped := lifecycleStatus(context.Cause(ctx)); mapped != nil {
+				return mapped
 			}
 		}
 		return err
@@ -163,6 +164,12 @@ func (s *streamWithContext) SendMsg(m any) error {
 }
 
 func (s *Server) onStreamOpen(ctx context.Context, streamID int64, _ string) error {
+	// The cap must hold at open time: a client can hold streams open without
+	// ever sending a request, which RegisterWithCancel would never see.
+	if s.openStreams.Add(1) > int64(s.Limits.MaxStreams) {
+		s.openStreams.Add(-1)
+		return status.Error(codes.ResourceExhausted, "stream limit exceeded")
+	}
 	// Authentication runs on the first request, after the stream is fully
 	// established, so an auth failure is delivered as a gRPC status rather
 	// than an early stream reset.
@@ -226,6 +233,11 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
 	}
 	if name != entry.resourceName {
+		// Record the subscription before authorizing so a concurrent
+		// RevokeResource can find and cancel this session during setup. A
+		// failed authorization ends the stream, so the entry is never reused.
+		entry.resourceName = name
+		s.Streams.SetResource(entry.session.ID, name)
 		if !s.Authz.Authorize(name, entry.identity) {
 			s.Metrics.AuthFailure("unauthorized")
 			return status.Error(codes.PermissionDenied, "resource is not authorized")
@@ -241,9 +253,7 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 			req.Node = &corev3.Node{}
 		}
 		req.Node.Id = engineKey
-		entry.resourceName = name
 		entry.engineKey = engineKey
-		s.Streams.SetResource(entry.session.ID, name)
 		return nil
 	}
 
@@ -256,8 +266,11 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
 	raw, ok := s.streams.LoadAndDelete(streamID)
 	if !ok {
+		// Rejected opens also trigger the closed callback; their slot was
+		// already rolled back.
 		return
 	}
+	s.openStreams.Add(-1)
 	entry := raw.(*serverStream)
 	if entry.session != nil {
 		s.Streams.Unregister(entry.session.ID)

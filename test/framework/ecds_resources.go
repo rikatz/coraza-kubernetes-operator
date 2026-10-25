@@ -26,7 +26,6 @@ import (
 	"github.com/stretchr/testify/require"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -74,38 +73,8 @@ func EnvoyFilterName(engineName string) string {
 }
 
 // -----------------------------------------------------------------------------
-// EnvoyFilter / WasmPlugin / NetworkPolicy Assertions
+// EnvoyFilter / NetworkPolicy Assertions
 // -----------------------------------------------------------------------------
-
-// ExpectEnvoyFilter polls until the Engine's EnvoyFilter exists and returns it.
-func (s *Scenario) ExpectEnvoyFilter(namespace, engineName string) *unstructured.Unstructured {
-	s.T.Helper()
-	name := EnvoyFilterName(engineName)
-	s.T.Logf("Waiting for EnvoyFilter %s/%s to exist", namespace, name)
-
-	output := &unstructured.Unstructured{}
-	require.Eventually(s.T, func() bool {
-		obj, err := s.F.DynamicClient.Resource(EnvoyFilterGVR).Namespace(namespace).Get(
-			s.T.Context(), name, metav1.GetOptions{},
-		)
-		if err != nil {
-			return false
-		}
-		output = obj
-		return true
-	}, DefaultTimeout, DefaultInterval, "EnvoyFilter %s/%s should exist", namespace, name)
-	return output
-}
-
-// NoWasmPlugin polls until the legacy WasmPlugin for the Engine no longer exists.
-// The ECDS path must never leave a WasmPlugin attached: a stray plugin inspects
-// traffic a second time (R12).
-func (s *Scenario) NoWasmPlugin(namespace, engineName string) {
-	s.T.Helper()
-	// The legacy WasmPlugin and the new EnvoyFilter share the same deterministic name.
-	s.T.Logf("Waiting for legacy WasmPlugin %s/%s to be gone", namespace, EnvoyFilterName(engineName))
-	s.ExpectResourceGone(namespace, EnvoyFilterName(engineName), WasmPluginGVR)
-}
 
 // ExpectEngineNetworkPolicy polls until the NetworkPolicy that authorizes the
 // Engine's Gateway pods is present in the operator namespace.
