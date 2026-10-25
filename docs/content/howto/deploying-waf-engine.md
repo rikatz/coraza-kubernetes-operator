@@ -5,7 +5,7 @@ weight: 25
 description: "Create an Engine resource to attach a WAF to a Kubernetes Gateway."
 ---
 
-An Engine resource references a RuleSet and attaches the Coraza WAF to a Gateway via an Istio WasmPlugin.
+An Engine resource references a RuleSet and attaches the Coraza WAF to a Gateway. The operator renders an Istio `EnvoyFilter` for the Gateway and delivers the compiled rules to it over ECDS (Envoy Configuration Discovery Service).
 
 ## Creating an Engine
 
@@ -53,17 +53,9 @@ spec:
 
 See [Configuring Failure Policies]({{< relref "configuring-failure-policies" >}}) for guidance on choosing.
 
-## Configuring the Poll Interval
+## Rule Set Delivery
 
-The `ruleSetCacheServer.pollIntervalSeconds` field controls how often the WASM plugin checks the cache for updated rules. The default is 15 seconds. Valid range: 1 to 3600.
-
-```yaml
-spec:
-  ruleSetCacheServer:
-    pollIntervalSeconds: 30
-```
-
-Lower values mean faster rule updates but slightly more network traffic between the WASM plugin and the cache server.
+Rules are delivered to the Gateway over ECDS, and the operator pushes updates as soon as they are accepted. The Gateway does not poll. The `spec.ruleSetCacheServer` field is retained for API compatibility but is ignored.
 
 ## Selecting the WASM Module
 
@@ -101,8 +93,8 @@ For detailed status conditions and events:
 kubectl describe engine my-engine -n my-namespace
 ```
 
-To verify that the WAF is attached, check for the WasmPlugin and NetworkPolicy created by the operator:
+To verify that the WAF is attached, check for the EnvoyFilter and NetworkPolicy created by the operator:
 
 ```bash
-kubectl get wasmplugin,networkpolicy -n my-namespace
+kubectl get envoyfilter,networkpolicy -n my-namespace
 ```
