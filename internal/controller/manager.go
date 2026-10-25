@@ -51,14 +51,13 @@ const DefaultRuleSetCacheServerPort = 18080
 
 // ControllerDeps carries the manager-wide dependencies shared by controllers.
 type ControllerDeps struct {
-	KubeClient          kubernetes.Interface
-	RuleSetCache        *cache.RuleSetCache
-	IstioRevision       string
-	OperatorNamespace   string
-	FailOnLegacyEngines bool
-	ECDSConfig          ECDSConfig
-	AssetBaseURL        string
-	XDS                 *xds.Dependencies
+	KubeClient        kubernetes.Interface
+	RuleSetCache      *cache.RuleSetCache
+	IstioRevision     string
+	OperatorNamespace string
+	ECDSConfig        ECDSConfig
+	AssetBaseURL      string
+	XDS               *xds.Dependencies
 }
 
 // -----------------------------------------------------------------------------
@@ -70,15 +69,6 @@ func SetupControllers(mgr ctrl.Manager, deps ControllerDeps) error {
 	corazaMetrics, err := NewCorazaMetrics(metrics.Registry)
 	if err != nil {
 		return fmt.Errorf("register coraza metrics: %w", err)
-	}
-
-	if err := mgr.Add(&LegacyEnginePreflight{
-		Reader:       mgr.GetAPIReader(),
-		Recorder:     mgr.GetEventRecorder("legacy-preflight"),
-		Metrics:      corazaMetrics,
-		FailOnLegacy: deps.FailOnLegacyEngines,
-	}); err != nil {
-		return fmt.Errorf("add legacy Engine preflight: %w", err)
 	}
 
 	if err := (&RuleSetReconciler{
@@ -101,7 +91,6 @@ func SetupControllers(mgr ctrl.Manager, deps ControllerDeps) error {
 
 	if err := (&EngineReconciler{
 		Client:            mgr.GetClient(),
-		APIReader:         mgr.GetAPIReader(),
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorder("engine-controller"),
 		Metrics:           corazaMetrics,
