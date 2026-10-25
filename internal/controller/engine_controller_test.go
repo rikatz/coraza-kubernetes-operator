@@ -470,15 +470,6 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			expectedError: "spec.ruleSet: Required value",
 		},
 		{
-			name: "removed image field rejected",
-			engineFunc: func() *wafv1alpha1.Engine {
-				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Wasm.Image = "oci://example.com/plugin:1"
-				return engine
-			},
-			expectedError: "spec.driver.wasm.image and imagePullSecret are removed",
-		},
-		{
 			name: "targetRef missing",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})

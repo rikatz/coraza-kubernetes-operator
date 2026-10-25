@@ -134,14 +134,13 @@ func main() {
 
 	ecdsConfig, assetBaseURL := buildECDSConfig(cfg, podNamespace)
 	if err := controller.SetupControllers(mgr, controller.ControllerDeps{
-		KubeClient:          kubeClient,
-		RuleSetCache:        rulesetCache,
-		IstioRevision:       cfg.istioRevision,
-		OperatorNamespace:   podNamespace,
-		FailOnLegacyEngines: cfg.failOnLegacyEngines,
-		ECDSConfig:          ecdsConfig,
-		AssetBaseURL:        assetBaseURL,
-		XDS:                 xdsDeps,
+		KubeClient:        kubeClient,
+		RuleSetCache:      rulesetCache,
+		IstioRevision:     cfg.istioRevision,
+		OperatorNamespace: podNamespace,
+		ECDSConfig:        ecdsConfig,
+		AssetBaseURL:      assetBaseURL,
+		XDS:               xdsDeps,
 	}); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
@@ -191,10 +190,6 @@ type config struct {
 	istioRevision string
 	operatorName  string
 
-	// failOnLegacyEngines makes the startup preflight stop the manager when a
-	// stored Engine still sets spec.driver.wasm.image or imagePullSecret.
-	failOnLegacyEngines bool
-
 	// ECDS settings: the address Gateways dial for config discovery, the port
 	// appended when the address has none, the base URL of the WASM asset, and
 	// the CA used to verify the operator certificate.
@@ -234,8 +229,6 @@ func parseFlags() config {
 	flag.StringVar(&cfg.istioRevision, "istio-revision", "", "The Istio revision label value for managed Istio resources")
 	flag.StringVar(&cfg.defaultWasmImage, "default-wasm-image", "", "Deprecated and ignored")
 	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
-	flag.BoolVar(&cfg.failOnLegacyEngines, "fail-on-legacy-engines", false,
-		"Stop the manager when a stored Engine still sets the removed spec.driver.wasm.image or imagePullSecret fields")
 	flag.StringVar(&cfg.xdsAdvertiseAddress, "xds-advertise-address", "",
 		"The operator address Gateways dial for ECDS; defaults to <operator-service-name>.<POD_NAMESPACE>.svc.cluster.local")
 	flag.IntVar(&cfg.xdsPort, "xds-port", controller.DefaultRuleSetCacheServerPort,

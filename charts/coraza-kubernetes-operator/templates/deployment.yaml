@@ -66,9 +66,6 @@ spec:
             {{- if .Values.defaultWasmImage }}
             - --default-wasm-image={{ .Values.defaultWasmImage }}
             {{- end }}
-            {{- if .Values.failOnLegacyEngines }}
-            - --fail-on-legacy-engines=true
-            {{- end }}
             {{- if .Values.logging.development }}
             - --zap-devel=true
             {{- else }}
