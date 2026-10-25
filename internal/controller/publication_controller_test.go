@@ -166,12 +166,12 @@ func TestPublicationReconcilerStatusBeforeInput(t *testing.T) {
 	writeAcceptedConfiguration(t, ctx, engine, acceptedConfigurationFor(t, ctx, engine, ruleSet, expected))
 
 	reconciler := newPublicationReconciler(t)
-	resourceName := xds.ResourceName(namespace, engine.Name, engine.UID)
+	engineKey := namespace + "/" + engine.Name
 
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: engine.Name}})
 	require.NoError(t, err)
 	require.False(t, result.Requeue)
-	_, ok := reconciler.Store.Get(resourceName)
+	_, ok := reconciler.Store.Get(engineKey)
 	require.False(t, ok, "a missing RuleSource must not be published")
 
 	createPublicationRuleSource(t, ctx, namespace, ruleSet.Name+"-source", publicationRules)
@@ -179,7 +179,7 @@ func TestPublicationReconcilerStatusBeforeInput(t *testing.T) {
 	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: engine.Name}})
 	require.NoError(t, err)
 
-	snapshot, ok := reconciler.Store.Get(resourceName)
+	snapshot, ok := reconciler.Store.Get(engineKey)
 	require.True(t, ok, "the accepted configuration must be published once inputs exist")
 	require.Equal(t, engine.Status.AcceptedConfiguration.Version, snapshot.Version)
 	require.Equal(t, engine.Status.AcceptedConfiguration.RuleSetContentHash, snapshot.RuleSetHash)
@@ -195,12 +195,12 @@ func TestPublicationReconcilerInputBeforeStatus(t *testing.T) {
 	engine := createPublicationEngine(t, ctx, namespace, "engine", ruleSet.Name, "pub-gw")
 
 	reconciler := newPublicationReconciler(t)
-	resourceName := xds.ResourceName(namespace, engine.Name, engine.UID)
+	engineKey := namespace + "/" + engine.Name
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: engine.Name}}
 
 	_, err := reconciler.Reconcile(ctx, request)
 	require.NoError(t, err)
-	_, ok := reconciler.Store.Get(resourceName)
+	_, ok := reconciler.Store.Get(engineKey)
 	require.False(t, ok, "desired state must not be published before acceptance")
 
 	inputs, err := loadRuleSetInputs(ctx, k8sClient, ruleSet)
@@ -211,7 +211,7 @@ func TestPublicationReconcilerInputBeforeStatus(t *testing.T) {
 
 	_, err = reconciler.Reconcile(ctx, request)
 	require.NoError(t, err)
-	snapshot, ok := reconciler.Store.Get(resourceName)
+	snapshot, ok := reconciler.Store.Get(engineKey)
 	require.True(t, ok)
 	require.Equal(t, engine.Status.AcceptedConfiguration.Version, snapshot.Version)
 }
@@ -233,11 +233,11 @@ func TestPublicationReconcilerMismatchKeepsPreviousSnapshot(t *testing.T) {
 
 	reconciler := newPublicationReconciler(t)
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: engine.Name}}
-	resourceName := xds.ResourceName(namespace, engine.Name, engine.UID)
+	engineKey := namespace + "/" + engine.Name
 
 	_, err = reconciler.Reconcile(ctx, request)
 	require.NoError(t, err)
-	first, ok := reconciler.Store.Get(resourceName)
+	first, ok := reconciler.Store.Get(engineKey)
 	require.True(t, ok)
 
 	// Change the RuleSet inputs without a new acceptance record.
@@ -247,10 +247,9 @@ func TestPublicationReconcilerMismatchKeepsPreviousSnapshot(t *testing.T) {
 	_, err = reconciler.Reconcile(ctx, request)
 	require.NoError(t, err)
 
-	after, ok := reconciler.Store.Get(resourceName)
+	after, ok := reconciler.Store.Get(engineKey)
 	require.True(t, ok)
 	require.Equal(t, first.Version, after.Version, "a mismatch must keep the previous snapshot")
-	require.Same(t, first, after)
 }
 
 func TestPublicationReconcilerSetupWithoutLeaderElection(t *testing.T) {

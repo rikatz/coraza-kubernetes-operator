@@ -32,6 +32,7 @@ import (
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	extensionv3 "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
+	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -105,17 +106,10 @@ func newStreamFixture(t *testing.T) *streamFixture {
 	streams := NewStreamRegistry(auth, authz, limits, metrics)
 	authz.SetRevoker(streams)
 
-	server := &Server{
-		Store:   store,
-		Auth:    auth,
-		Authz:   authz,
-		Streams: streams,
-		Limits:  limits,
-		Metrics: metrics,
-	}
+	server := NewServer(store, auth, authz, streams, limits, metrics, logr.Discard())
 
 	listener := bufconn.Listen(1 << 20)
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.StreamInterceptor(server.StreamInterceptor()))
 	server.Register(grpcServer)
 	go func() { _ = grpcServer.Serve(listener) }()
 	t.Cleanup(grpcServer.Stop)
@@ -173,6 +167,7 @@ func (f *streamFixture) snapshot(version string) *Snapshot {
 		EngineUID:    types.UID("engine-uid"),
 		RuleSetHash:  "sha256:" + version,
 		Version:      "sha256:" + version,
+		Resource:     &corev3.TypedExtensionConfig{Name: f.resourceName},
 	}
 }
 

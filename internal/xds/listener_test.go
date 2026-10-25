@@ -61,14 +61,7 @@ func newListenerFixture(t *testing.T) *listenerFixture {
 	authz := NewAuthzIndex(nil, time.Hour)
 	auth := NewAuthenticator(nil, "", time.Minute, time.Minute, time.Second, 0)
 	streams := NewStreamRegistry(auth, authz, DefaultLimits(), metrics)
-	server := &Server{
-		Store:   store,
-		Auth:    auth,
-		Authz:   authz,
-		Streams: streams,
-		Metrics: metrics,
-		Log:     logr.Discard(),
-	}
+	server := NewServer(store, auth, authz, streams, DefaultLimits(), metrics, logr.Discard())
 
 	listener, err := NewListener(ListenerConfig{
 		BindAddress: "127.0.0.1:0",

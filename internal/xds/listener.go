@@ -109,6 +109,7 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 		grpc.MaxRecvMsgSize(limits.MaxMessageBytes),
 		grpc.MaxSendMsgSize(limits.MaxMessageBytes),
 		grpc.ConnectionTimeout(connectionTimeout),
+		grpc.ChainStreamInterceptor(server.StreamInterceptor()),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             30 * time.Second,
 			PermitWithoutStream: true,

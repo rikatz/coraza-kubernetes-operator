@@ -180,8 +180,7 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 	}
 
 	fingerprint := assemble.Fingerprint(inputs)
-	resourceName := xds.ResourceName(engine.Namespace, engine.Name, engine.UID)
-	if r.coalesced(key, fingerprint, accepted.Version, resourceName) {
+	if r.coalesced(key, fingerprint, accepted.Version) {
 		return nil
 	}
 
@@ -231,7 +230,7 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 		return err
 	}
 
-	r.Store.Replace(&xds.Snapshot{
+	if err := r.Store.Replace(&xds.Snapshot{
 		ResourceName: artifact.ResourceName,
 		Namespace:    engine.Namespace,
 		EngineName:   engine.Name,
@@ -239,13 +238,15 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 		RuleSetHash:  accepted.RuleSetContentHash,
 		Version:      artifact.Version,
 		Resource:     artifact.Resource,
-	})
+	}); err != nil {
+		return err
+	}
 	r.Metrics.SetSnapshotVersion(engine.Namespace, engine.Name)
 	r.remember(key, fingerprint, accepted.Version)
 	return nil
 }
 
-func (r *PublicationReconciler) coalesced(key types.NamespacedName, fingerprint, acceptedVersion, resourceName string) bool {
+func (r *PublicationReconciler) coalesced(key types.NamespacedName, fingerprint, acceptedVersion string) bool {
 	r.mu.Lock()
 	state, ok := r.states[key]
 	r.mu.Unlock()
@@ -255,7 +256,7 @@ func (r *PublicationReconciler) coalesced(key types.NamespacedName, fingerprint,
 
 	// The inputs and accepted record are unchanged. Skip rendering only when
 	// the store already holds the accepted version.
-	if snapshot, exists := r.Store.Get(resourceName); exists {
+	if snapshot, exists := r.Store.Get(key.String()); exists {
 		return snapshot.Version == acceptedVersion
 	}
 	return false
