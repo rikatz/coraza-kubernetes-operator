@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/corazawaf/coraza/v3 v3.8.1
+	github.com/envoyproxy/go-control-plane v0.14.0
 	github.com/envoyproxy/go-control-plane/envoy v1.40.0
 	github.com/go-logr/logr v1.4.4
 	github.com/google/uuid v1.6.0
@@ -33,6 +34,7 @@ require (
 	github.com/corazawaf/libinjection-go v0.3.5 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
+	github.com/envoyproxy/go-control-plane/ratelimit v0.1.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect

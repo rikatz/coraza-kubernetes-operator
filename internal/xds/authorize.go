@@ -302,6 +302,18 @@ func (a *AuthzIndex) refreshFailed(resourceName string, err error) error {
 	return err
 }
 
+// EngineKey returns the stable "<namespace>/<engine>" snapshot key for an
+// authorized resource.
+func (a *AuthzIndex) EngineKey(resourceName string) (string, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	entry, ok := a.entries[resourceName]
+	if !ok {
+		return "", false
+	}
+	return entry.Namespace + "/" + entry.EngineName, true
+}
+
 func engineAcceptedForGeneration(engine *wafv1alpha1.Engine) bool {
 	if engine == nil || engine.Status == nil {
 		return false

@@ -97,6 +97,12 @@ func NewStreamRegistry(auth *Authenticator, authz *AuthzIndex, limits Limits, me
 
 // Register reserves a stream slot and returns its session.
 func (r *StreamRegistry) Register(parent context.Context, resourceName string, id Identity, token string) (*StreamSession, error) {
+	return r.RegisterWithCancel(parent, nil, resourceName, id, token)
+}
+
+// RegisterWithCancel reserves a stream slot using cancel as the stream's
+// lifecycle cancel. A nil cancel creates a child context owned by the registry.
+func (r *StreamRegistry) RegisterWithCancel(parent context.Context, cancel context.CancelCauseFunc, resourceName string, id Identity, token string) (*StreamSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -108,7 +114,10 @@ func (r *StreamRegistry) Register(parent context.Context, resourceName string, i
 	}
 
 	now := r.now()
-	ctx, cancel := context.WithCancelCause(parent)
+	ctx := parent
+	if cancel == nil {
+		ctx, cancel = context.WithCancelCause(parent)
+	}
 	r.nextID++
 	session := &StreamSession{
 		ID:           r.nextID,
@@ -140,7 +149,6 @@ func (r *StreamRegistry) Unregister(id uint64) {
 	} else {
 		delete(r.perIdentity, session.Identity.Key())
 	}
-	session.cancel(ErrServerShutdown)
 	r.metrics.StreamClosed()
 }
 

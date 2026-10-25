@@ -19,32 +19,40 @@ package xds
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"strings"
+	"sync"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
-	extensionv3 "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
+	extensionconfigservice "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
+	xdsserver "github.com/envoyproxy/go-control-plane/pkg/server/v3"
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/anypb"
 )
 
 const (
-	authorizationHeader = "authorization"
-	nackLogLimit        = 256
+	authorizationHeader        = "authorization"
+	invalidSubscriptionMessage = "invalid subscription"
 )
 
-// Server implements the streaming state-of-the-world ECDS service directly.
-// It deliberately does not use the go-control-plane cache adapter: per-stream
-// authentication and authorization must run before any snapshot lookup, and
-// identity comes only from TokenReview, never from node metadata.
-type Server struct {
-	extensionv3.UnimplementedExtensionConfigDiscoveryServiceServer
+// lifecycleKey carries the stream's cancel function from the interceptor into
+// the go-control-plane callbacks, which have no other way to close a stream.
+type lifecycleKey struct{}
 
+type serverStream struct {
+	ctx          context.Context
+	identity     Identity
+	session      *StreamSession
+	resourceName string
+}
+
+// Server serves ECDS with go-control-plane's SnapshotCache and stream handler.
+// Authentication, authorization, revalidation, and stream lifecycle remain
+// CKO-owned.
+type Server struct {
 	Store   *SnapshotStore
 	Auth    *Authenticator
 	Authz   *AuthzIndex
@@ -52,175 +60,200 @@ type Server struct {
 	Limits  Limits
 	Metrics *Metrics
 	Log     logr.Logger
+
+	srv xdsserver.Server
+
+	streams sync.Map // int64 -> *serverStream
 }
 
-// Register registers the ECDS service with a gRPC server.
+// NewServer wires the go-control-plane server around the snapshot cache.
+func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, streams *StreamRegistry, limits Limits, metrics *Metrics, logger logr.Logger) *Server {
+	s := &Server{
+		Store:   store,
+		Auth:    auth,
+		Authz:   authz,
+		Streams: streams,
+		Limits:  limits,
+		Metrics: metrics,
+		Log:     logger,
+	}
+	s.srv = xdsserver.NewServer(context.Background(), store.cache, xdsserver.CallbackFuncs{
+		StreamOpenFunc:    s.onStreamOpen,
+		StreamRequestFunc: s.onStreamRequest,
+		StreamClosedFunc:  s.onStreamClosed,
+	})
+	return s
+}
+
+// Register registers the ECDS service on the gRPC server.
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
-	extensionv3.RegisterExtensionConfigDiscoveryServiceServer(registrar, s)
+	extensionconfigservice.RegisterExtensionConfigDiscoveryServiceServer(registrar, s.srv)
 }
 
-// StreamExtensionConfigs serves one SotW ECDS stream.
-func (s *Server) StreamExtensionConfigs(stream extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsServer) error {
-	ctx := stream.Context()
-	log := s.logger()
+// StreamInterceptor supplies the cancelable stream context the revalidation
+// registry needs. go-control-plane has no public close-stream API.
+func (s *Server) StreamInterceptor() grpc.StreamServerInterceptor {
+	return func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		ctx, cancel := context.WithCancelCause(stream.Context())
 
-	first, err := stream.Recv()
-	if err != nil {
-		return receiveStatus(err)
-	}
-
-	token, err := bearerToken(ctx)
-	if err != nil {
-		log.Info("ECDS stream rejected", "reason", "authorization metadata", "detail", err.Error())
-		s.Metrics.AuthFailure("error")
-		return status.Error(codes.Unauthenticated, authFailureMessage)
-	}
-	identity, err := s.Auth.Authenticate(ctx, token)
-	if err != nil {
-		log.Info("ECDS stream rejected", "reason", "token review", "detail", err.Error())
-		s.Metrics.AuthFailure("error")
-		return status.Error(codes.Unauthenticated, authFailureMessage)
-	}
-	s.Metrics.AuthFailure("authenticated")
-
-	resourceName, err := singleResourceName(first.GetResourceNames())
-	if err != nil {
-		return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
-	}
-	if !s.Authz.Authorize(resourceName, *identity) {
-		s.Metrics.AuthFailure("unauthorized")
-		return status.Error(codes.PermissionDenied, permissionDeniedMessage)
-	}
-
-	session, err := s.Streams.Register(ctx, resourceName, *identity, token)
-	if err != nil {
-		return status.Error(codes.ResourceExhausted, "stream limit exceeded")
-	}
-	defer s.Streams.Unregister(session.ID)
-
-	state := &subscription{}
-	if err := s.processRequest(session, state, first, &resourceName, *identity, log); err != nil {
+		wrapped := &streamWithContext{
+			ServerStream: stream,
+			ctx:          context.WithValue(ctx, lifecycleKey{}, cancel),
+		}
+		err := handler(srv, wrapped)
+		if ctx.Err() != nil {
+			switch context.Cause(ctx) {
+			case ErrRevoked:
+				return status.Error(codes.PermissionDenied, "resource is not authorized")
+			case ErrRevalidateFailed:
+				return status.Error(codes.Unauthenticated, "authentication failed")
+			case ErrLifetimeExpired, ErrServerShutdown:
+				return status.Error(codes.Unavailable, "stream must be re-established")
+			}
+		}
+		if err == nil {
+			return nil
+		}
+		// Preserve explicit auth/authz/subscription errors. Only map errors that
+		// come from the lifecycle cancellation below.
+		if st, ok := status.FromError(err); ok && st.Code() != codes.Canceled && st.Code() != codes.Unknown {
+			return err
+		}
+		if ctx.Err() != nil {
+			switch context.Cause(ctx) {
+			case ErrRevoked:
+				return status.Error(codes.PermissionDenied, "resource is not authorized")
+			case ErrRevalidateFailed:
+				return status.Error(codes.Unauthenticated, "authentication failed")
+			case ErrLifetimeExpired, ErrServerShutdown:
+				return status.Error(codes.Unavailable, "stream must be re-established")
+			}
+		}
 		return err
 	}
-
-	requests := make(chan *discoveryv3.DiscoveryRequest, 1)
-	receiveErrors := make(chan error, 1)
-	go func() {
-		for {
-			request, err := stream.Recv()
-			if err != nil {
-				select {
-				case receiveErrors <- err:
-				case <-session.Context().Done():
-				}
-				return
-			}
-			select {
-			case requests <- request:
-			case <-session.Context().Done():
-				return
-			}
-		}
-	}()
-
-	for {
-		// Capture the change channel before reading the store so a snapshot
-		// written in between still closes the captured channel.
-		changed := s.Store.Changed()
-		if snapshot, ok := s.Store.Get(resourceName); ok &&
-			snapshot.Version != state.lastVersion &&
-			snapshot.Version != state.nackVersion {
-			if err := s.send(stream, state, snapshot); err != nil {
-				return err
-			}
-		}
-
-		select {
-		case <-session.Context().Done():
-			return streamCloseStatus(session.Context())
-		case err := <-receiveErrors:
-			return receiveStatus(err)
-		case request := <-requests:
-			if err := s.processRequest(session, state, request, &resourceName, *identity, log); err != nil {
-				return err
-			}
-		case <-changed:
-		}
-	}
 }
 
-// processRequest handles one ACK, NACK, or (re)subscription.
-func (s *Server) processRequest(
-	session *StreamSession,
-	state *subscription,
-	request *discoveryv3.DiscoveryRequest,
-	resourceName *string,
-	identity Identity,
-	log logr.Logger,
-) error {
-	switch state.classify(request) {
-	case requestAck:
-		state.lastVersion = state.acknowledgedVersion(request)
-		s.Metrics.Ack()
-		return nil
-
-	case requestNack:
-		version := state.acknowledgedVersion(request)
-		state.nackVersion = version
-		s.Metrics.Nack("rejected")
-		log.V(1).Info("ECDS response rejected by client",
-			"namespace", identity.Namespace, "serviceAccount", identity.Name, "version", version,
-			"detail", boundedDetail(request.GetErrorDetail().GetMessage()))
-		return nil
-
-	default:
-		name, err := singleResourceName(request.GetResourceNames())
-		if err != nil {
-			return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
-		}
-		if name != *resourceName {
-			if !s.Authz.Authorize(name, identity) {
-				s.Metrics.AuthFailure("unauthorized")
-				return status.Error(codes.PermissionDenied, permissionDeniedMessage)
-			}
-			*resourceName = name
-			s.Streams.SetResource(session.ID, name)
-		}
-		// A new or updated subscription expects a response even when the
-		// snapshot version is unchanged.
-		state.lastVersion = ""
-		state.nackVersion = ""
-		return nil
-	}
+type streamWithContext struct {
+	grpc.ServerStream
+	ctx context.Context
 }
 
-func (s *Server) send(
-	stream extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsServer,
-	state *subscription,
-	snapshot *Snapshot,
-) error {
-	resource, err := anypb.New(snapshot.Resource)
-	if err != nil {
-		return status.Error(codes.Internal, "failed to encode ECDS resource")
-	}
-	response := &discoveryv3.DiscoveryResponse{
-		VersionInfo: snapshot.Version,
-		Resources:   []*anypb.Any{resource},
-		TypeUrl:     TypeURL,
-		Nonce:       state.nextNonce(),
-	}
-	if err := stream.Send(response); err != nil {
+func (s *streamWithContext) Context() context.Context { return s.ctx }
+
+// RecvMsg and SendMsg observe the lifecycle context. go-control-plane's stream
+// handler blocks in Recv, so cancellation must unblock it here;
+// the read goroutine ends when the server closes the stream.
+func (s *streamWithContext) RecvMsg(m any) error {
+	done := make(chan error, 1)
+	go func() { done <- s.ServerStream.RecvMsg(m) }()
+	select {
+	case err := <-done:
 		return err
+	case <-s.ctx.Done():
+		return status.Error(codes.Canceled, "stream closed")
 	}
-	state.lastVersion = snapshot.Version
+}
+
+func (s *streamWithContext) SendMsg(m any) error {
+	if s.ctx.Err() != nil {
+		return status.Error(codes.Canceled, "stream closed")
+	}
+	return s.ServerStream.SendMsg(m)
+}
+
+func (s *Server) onStreamOpen(ctx context.Context, streamID int64, _ string) error {
+	// Authentication runs on the first request, after the stream is fully
+	// established, so an auth failure is delivered as a gRPC status rather
+	// than an early stream reset.
+	s.streams.Store(streamID, &serverStream{ctx: ctx})
 	return nil
 }
 
-func (s *Server) logger() logr.Logger {
-	if s.Log.GetSink() == nil {
-		return logr.Discard()
+func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryRequest) error {
+	raw, ok := s.streams.Load(streamID)
+	if !ok {
+		return status.Error(codes.Unauthenticated, "authentication failed")
 	}
-	return s.Log
+	entry := raw.(*serverStream)
+
+	if entry.session == nil {
+		token, err := bearerToken(entry.ctx)
+		if err != nil {
+			s.Metrics.AuthFailure("error")
+			return status.Error(codes.Unauthenticated, "authentication failed")
+		}
+		identity, err := s.Auth.Authenticate(entry.ctx, token)
+		if err != nil {
+			s.Metrics.AuthFailure("error")
+			return status.Error(codes.Unauthenticated, "authentication failed")
+		}
+		cancel, _ := entry.ctx.Value(lifecycleKey{}).(context.CancelCauseFunc)
+		session, err := s.Streams.RegisterWithCancel(entry.ctx, cancel, "", *identity, token)
+		if err != nil {
+			return status.Error(codes.ResourceExhausted, "stream limit exceeded")
+		}
+		s.Metrics.AuthFailure("authenticated")
+		entry.identity = *identity
+		entry.session = session
+	}
+
+	if req.GetErrorDetail() != nil {
+		s.Metrics.Nack("rejected")
+		return nil
+	}
+
+	names := req.GetResourceNames()
+	if len(names) == 0 {
+		if req.GetResponseNonce() != "" {
+			s.Metrics.Ack()
+			return nil
+		}
+		return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
+	}
+	if len(names) != 1 {
+		return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
+	}
+
+	name := names[0]
+	if name == "" || !strings.HasPrefix(name, resourceNamePrefix) || strings.ContainsAny(name, "*?") {
+		return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
+	}
+	if name != entry.resourceName {
+		if !s.Authz.Authorize(name, entry.identity) {
+			s.Metrics.AuthFailure("unauthorized")
+			return status.Error(codes.PermissionDenied, "resource is not authorized")
+		}
+		engineKey, ok := s.Authz.EngineKey(name)
+		if !ok {
+			s.Metrics.AuthFailure("unauthorized")
+			return status.Error(codes.PermissionDenied, "resource is not authorized")
+		}
+		// The cache is keyed by node.id, which the client controls. Rewrite it
+		// to the authorized Engine key before CreateWatch runs.
+		if req.Node == nil {
+			req.Node = &corev3.Node{}
+		}
+		req.Node.Id = engineKey
+		entry.resourceName = name
+		s.Streams.SetResource(entry.session.ID, name)
+		return nil
+	}
+
+	if req.GetResponseNonce() != "" {
+		s.Metrics.Ack()
+	}
+	return nil
+}
+
+func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
+	raw, ok := s.streams.LoadAndDelete(streamID)
+	if !ok {
+		return
+	}
+	entry := raw.(*serverStream)
+	if entry.session != nil {
+		s.Streams.Unregister(entry.session.ID)
+	}
 }
 
 // bearerToken extracts exactly one "Bearer <token>" authorization header.
@@ -231,49 +264,11 @@ func bearerToken(ctx context.Context) (string, error) {
 	}
 	values := md.Get(authorizationHeader)
 	if len(values) != 1 {
-		return "", fmt.Errorf("missing or duplicate authorization header (keys: %v)", metadataKeys(md))
+		return "", errors.New("missing or duplicate authorization header")
 	}
 	scheme, token, ok := strings.Cut(values[0], " ")
-	if !ok || !strings.EqualFold(scheme, bearerScheme) || strings.TrimSpace(token) == "" {
+	if !ok || !strings.EqualFold(scheme, "bearer") || strings.TrimSpace(token) == "" {
 		return "", errors.New("malformed authorization header")
 	}
 	return strings.TrimSpace(token), nil
-}
-
-// metadataKeys returns the incoming metadata keys without their values.
-func metadataKeys(md metadata.MD) []string {
-	keys := make([]string, 0, len(md))
-	for key := range md {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-func receiveStatus(err error) error {
-	if err == nil || errors.Is(err, io.EOF) {
-		return nil
-	}
-	return err
-}
-
-// streamCloseStatus maps a bounded close cause to a generic gRPC status.
-func streamCloseStatus(ctx context.Context) error {
-	cause := context.Cause(ctx)
-	switch {
-	case errors.Is(cause, ErrRevoked):
-		return status.Error(codes.PermissionDenied, permissionDeniedMessage)
-	case errors.Is(cause, ErrRevalidateFailed):
-		return status.Error(codes.Unauthenticated, authFailureMessage)
-	case errors.Is(cause, ErrLifetimeExpired), errors.Is(cause, ErrServerShutdown):
-		return status.Error(codes.Unavailable, "stream must be re-established")
-	default:
-		return nil
-	}
-}
-
-func boundedDetail(detail string) string {
-	if len(detail) > nackLogLimit {
-		return detail[:nackLogLimit]
-	}
-	return detail
 }

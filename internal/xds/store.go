@@ -18,106 +18,80 @@ package xds
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
+
+	cachetypes "github.com/envoyproxy/go-control-plane/pkg/cache/types"
+	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
+	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 )
 
-// SnapshotStore holds the latest published snapshot per ECDS resource name.
-// Replace is atomic and StoreChanged broadcasts to every waiter through a
-// closed-and-replaced channel, so a slow stream never blocks a writer.
+// SnapshotStore publishes one ECDS snapshot per Engine into go-control-plane's
+// SnapshotCache. The cache key is "<namespace>/<engine>", which the stream
+// callbacks write into node.id after authorization.
 type SnapshotStore struct {
-	mu        sync.RWMutex
-	snapshots map[string]*Snapshot
-	changed   chan struct{}
+	cache cachev3.SnapshotCache
+
+	mu   sync.RWMutex
+	meta map[string]Snapshot
 }
 
-// NewSnapshotStore returns an empty store.
+// NewSnapshotStore returns an empty snapshot store.
 func NewSnapshotStore() *SnapshotStore {
 	return &SnapshotStore{
-		snapshots: make(map[string]*Snapshot),
-		changed:   make(chan struct{}),
+		cache: cachev3.NewSnapshotCache(false, cachev3.IDHash{}, nil),
+		meta:  make(map[string]Snapshot),
 	}
 }
 
-// Replace stores snapshot under its resource name and reports whether the
-// effective version changed. A new resource always counts as a change.
-func (s *SnapshotStore) Replace(snapshot *Snapshot) bool {
-	if snapshot == nil || snapshot.ResourceName == "" {
-		return false
+// Replace publishes an Engine snapshot. The cache key is the Engine key, not
+// the ECDS resource name, so it survives a UID change and can be deleted by
+// namespace/name.
+func (s *SnapshotStore) Replace(snapshot *Snapshot) error {
+	if snapshot == nil || snapshot.Resource == nil {
+		return errors.New("snapshot and resource are required")
 	}
-
+	compiled, err := cachev3.NewSnapshot(snapshot.Version, map[resource.Type][]cachetypes.Resource{
+		resource.ExtensionConfigType: {snapshot.Resource},
+	})
+	if err != nil {
+		return fmt.Errorf("build snapshot: %w", err)
+	}
+	key := engineSnapshotKey(snapshot.Namespace, snapshot.EngineName)
+	if err := s.cache.SetSnapshot(context.Background(), key, compiled); err != nil {
+		return err
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	previous, existed := s.snapshots[snapshot.ResourceName]
-	s.snapshots[snapshot.ResourceName] = snapshot
-	changed := !existed || previous.Version != snapshot.Version
-	if changed {
-		s.broadcastLocked()
-	}
-	return changed
+	s.meta[key] = *snapshot
+	s.mu.Unlock()
+	return nil
 }
 
-// Get returns the current snapshot for resourceName.
-func (s *SnapshotStore) Get(resourceName string) (*Snapshot, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	snapshot, ok := s.snapshots[resourceName]
-	return snapshot, ok
-}
-
-// Delete removes a resource snapshot and reports whether it existed.
-func (s *SnapshotStore) Delete(resourceName string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.snapshots[resourceName]; !ok {
-		return false
-	}
-	delete(s.snapshots, resourceName)
-	s.broadcastLocked()
-	return true
-}
-
-// DeleteEngine removes every snapshot belonging to an Engine, including a
-// snapshot left under a stale Engine UID after recreation.
+// DeleteEngine removes an Engine's snapshot and any open watches.
 func (s *SnapshotStore) DeleteEngine(namespace, engineName string) {
+	key := engineSnapshotKey(namespace, engineName)
+	s.cache.ClearSnapshot(key)
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	changed := false
-	for name, snapshot := range s.snapshots {
-		if snapshot.Namespace == namespace && snapshot.EngineName == engineName {
-			delete(s.snapshots, name)
-			changed = true
-		}
-	}
-	if changed {
-		s.broadcastLocked()
-	}
+	delete(s.meta, key)
+	s.mu.Unlock()
 }
 
-// Wait blocks until the snapshot for resourceName differs from afterVersion
-// (or first appears) and returns it. It returns ctx.Err() when ctx ends.
-func (s *SnapshotStore) Wait(ctx context.Context, resourceName, afterVersion string) (*Snapshot, error) {
-	for {
-		changed := s.Changed()
-		if snapshot, ok := s.Get(resourceName); ok && snapshot.Version != afterVersion {
-			return snapshot, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-changed:
-		}
-	}
-}
-
-// Changed returns a channel that is closed on the next store change.
-func (s *SnapshotStore) Changed() <-chan struct{} {
+// Get returns the published version for an Engine key ("namespace/name").
+func (s *SnapshotStore) Get(engineKey string) (*Snapshot, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.changed
+	meta, ok := s.meta[engineKey]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	if _, err := s.cache.GetSnapshot(engineKey); err != nil {
+		return nil, false
+	}
+	out := meta
+	return &out, true
 }
 
-func (s *SnapshotStore) broadcastLocked() {
-	close(s.changed)
-	s.changed = make(chan struct{})
+func engineSnapshotKey(namespace, engineName string) string {
+	return namespace + "/" + engineName
 }
