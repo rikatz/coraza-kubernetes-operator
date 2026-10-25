@@ -57,7 +57,7 @@ The Engine could not reach its desired state. Common reasons:
 | `RuleSetDegraded` | The referenced RuleSet is in a Degraded state. | Check the RuleSet status: `kubectl describe ruleset <name>`. |
 | `InvalidConfiguration` | The Engine spec contains an invalid configuration. | Check the condition message for details and fix the Engine spec. |
 | `ProvisioningFailed` | Failed to create or update the EnvoyFilter resource. | Check operator logs and RBAC permissions. |
-| `NetworkPolicyFailed` | Failed to apply the NetworkPolicy for the cache server. | Check operator logs and RBAC permissions. |
+| `NetworkPolicyFailed` | Failed to apply the NetworkPolicy that restricts access to the operator's xDS listener. | Check operator logs and RBAC permissions. |
 | `TLSNotConfigured` | The operator has no verified CA chain for its xDS serving certificate. | Set `--xds-ca-path` to the CA bundle Gateways use to verify the operator certificate. |
 
 ## RuleSource Conditions
@@ -168,9 +168,9 @@ kubectl describe rulesource <name> -n my-namespace
    kubectl get gateways -n my-namespace
    ```
 
-2. Check that the WasmPlugin was created:
+2. Check that the EnvoyFilter was created:
    ```bash
-   kubectl get wasmplugin -n my-namespace
+   kubectl get envoyfilter -n my-namespace
    ```
 
 3. Check the Gateway proxy logs for Coraza output:

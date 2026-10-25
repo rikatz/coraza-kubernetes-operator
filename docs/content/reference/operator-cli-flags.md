@@ -16,7 +16,7 @@ The operator manager binary accepts the following command-line flags. When deplo
 | `--metrics-bind-address` | `0` | Address for the metrics endpoint. Use `:8443` for HTTPS or `0` to disable. |
 | `--health-probe-bind-address` | `:8081` | Address for the health and readiness probe endpoint. |
 | `--leader-elect` | `false` | Enable leader election for controller manager. Required for running multiple replicas. |
-| `--operator-name` | (none) | Helm release name. When set, the operator creates Istio ServiceEntry and DestinationRule prerequisites at startup. |
+| `--operator-name` | (none) | Helm release name. Used as a fallback for the default xDS advertise address when `--operator-service-name` is unset. |
 
 ### TLS Certificates
 
@@ -28,11 +28,13 @@ The operator manager binary accepts the following command-line flags. When deplo
 
 ### RuleSet Cache
 
+These flags are accepted for backward compatibility but ignored: the legacy HTTP rule cache server is not started and rules are delivered over ECDS. They have no effect on rule delivery.
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--cache-gc-interval` | `5m` | How often to check for and remove stale cache entries. |
-| `--cache-max-age` | `24h` | Maximum age before a cache entry is considered stale. |
-| `--cache-max-size` | `104857600` (100 MB) | Maximum total size of all cached rules in bytes. |
+| `--cache-gc-interval` | `5m` | Ignored. |
+| `--cache-max-age` | `24h` | Ignored. |
+| `--cache-max-size` | `104857600` (100 MB) | Ignored. |
 
 ### xDS Serving
 
