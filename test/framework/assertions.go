@@ -112,22 +112,6 @@ func (s *Scenario) ExpectGatewayAccepted(namespace, name string) {
 // Resource Existence Assertions
 // -----------------------------------------------------------------------------
 
-// ExpectWasmPluginExists polls until a WasmPlugin with the given name exists
-// in the namespace.
-func (s *Scenario) ExpectWasmPluginExists(namespace, name string) *unstructured.Unstructured {
-	s.T.Helper()
-	s.T.Logf("Waiting for WasmPlugin %s/%s to exist", namespace, name)
-	var err error
-	output := &unstructured.Unstructured{}
-	require.Eventually(s.T, func() bool {
-		output, err = s.F.DynamicClient.Resource(WasmPluginGVR).Namespace(namespace).Get(
-			s.T.Context(), name, metav1.GetOptions{},
-		)
-		return err == nil
-	}, DefaultTimeout, DefaultInterval, "WasmPlugin %s/%s should exist", namespace, name)
-	return output
-}
-
 // ExpectEnvoyFilterExists polls until an EnvoyFilter with the given name
 // exists in the namespace.
 func (s *Scenario) ExpectEnvoyFilterExists(namespace, name string) *unstructured.Unstructured {

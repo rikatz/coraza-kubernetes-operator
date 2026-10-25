@@ -168,6 +168,7 @@ func (s *Server) onStreamOpen(ctx context.Context, streamID int64, _ string) err
 	// ever sending a request, which RegisterWithCancel would never see.
 	if s.openStreams.Add(1) > int64(s.Limits.MaxStreams) {
 		s.openStreams.Add(-1)
+		s.Metrics.StreamLimitRejected()
 		return status.Error(codes.ResourceExhausted, "stream limit exceeded")
 	}
 	// Authentication runs on the first request, after the stream is fully
@@ -198,6 +199,7 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		cancel, _ := entry.ctx.Value(lifecycleKey{}).(context.CancelCauseFunc)
 		session, err := s.Streams.RegisterWithCancel(entry.ctx, cancel, "", *identity, token)
 		if err != nil {
+			s.Metrics.StreamLimitRejected()
 			return status.Error(codes.ResourceExhausted, "stream limit exceeded")
 		}
 		s.Metrics.AuthFailure("authenticated")

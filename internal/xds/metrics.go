@@ -27,6 +27,7 @@ import (
 type Metrics struct {
 	streamsActive           prometheus.Gauge
 	streamReconnects        prometheus.Counter
+	streamLimitRejections   prometheus.Counter
 	acks                    prometheus.Counter
 	nacks                   *prometheus.CounterVec
 	authFailures            *prometheus.CounterVec
@@ -48,6 +49,10 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		streamReconnects: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "coraza_xds_stream_reconnects_total",
 			Help: "Total ECDS streams registered, including reconnects.",
+		}),
+		streamLimitRejections: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "coraza_xds_stream_limit_rejections_total",
+			Help: "Total ECDS streams rejected because a concurrency limit was exceeded.",
 		}),
 		acks: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "coraza_xds_acks_total",
@@ -88,7 +93,8 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 	}
 
 	for _, collector := range []prometheus.Collector{
-		m.streamsActive, m.streamReconnects, m.acks, m.nacks, m.authFailures,
+		m.streamsActive, m.streamReconnects, m.streamLimitRejections, m.acks,
+		m.nacks, m.authFailures,
 		m.publicationLag, m.hashMismatch, m.coldReconstruction,
 		m.snapshotVersionInfo, m.wasmAssetRequests, m.bundledManifestVerified,
 	} {
@@ -115,6 +121,14 @@ func (m *Metrics) StreamClosed() {
 		return
 	}
 	m.streamsActive.Dec()
+}
+
+// StreamLimitRejected records a stream rejected by a concurrency limit.
+func (m *Metrics) StreamLimitRejected() {
+	if m == nil {
+		return
+	}
+	m.streamLimitRejections.Inc()
 }
 
 // Ack records an acknowledged response.

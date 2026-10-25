@@ -33,6 +33,7 @@ import (
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	extensionv3 "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -54,6 +55,7 @@ type streamFixture struct {
 	store         *SnapshotStore
 	authz         *AuthzIndex
 	streams       *StreamRegistry
+	metrics       *Metrics
 	conn          *grpc.ClientConn
 	client        extensionv3.ExtensionConfigDiscoveryServiceClient
 	resourceName  string
@@ -136,6 +138,7 @@ func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
 		store:        store,
 		authz:        authz,
 		streams:      streams,
+		metrics:      metrics,
 		conn:         conn,
 		client:       extensionv3.NewExtensionConfigDiscoveryServiceClient(conn),
 		resourceName: resourceName,
@@ -418,6 +421,31 @@ func TestStreamRejectsIdleStreamBeyondLimit(t *testing.T) {
 	}
 	if code := recvCode(t, idle); code != codes.ResourceExhausted {
 		t.Fatalf("code = %v, want ResourceExhausted", code)
+	}
+	if got := testutil.ToFloat64(fixture.metrics.streamLimitRejections); got != 1 {
+		t.Fatalf("stream limit rejections = %v, want 1", got)
+	}
+}
+
+func TestStreamRejectsPerIdentityBeyondLimit(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxStreams = 2
+	limits.MaxStreamsPerIdentity = 1
+	limits.StreamMaxLifetime = time.Hour
+	fixture := newStreamFixtureWithLimits(t, limits)
+	fixture.store.Replace(fixture.snapshot("v1"))
+
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	_ = recv(t, stream)
+
+	// The open-stream cap allows the second stream, but the per-identity cap
+	// rejects it when it registers.
+	second := fixture.open(t, validToken, fixture.resourceName)
+	if code := recvCode(t, second); code != codes.ResourceExhausted {
+		t.Fatalf("code = %v, want ResourceExhausted", code)
+	}
+	if got := testutil.ToFloat64(fixture.metrics.streamLimitRejections); got != 1 {
+		t.Fatalf("stream limit rejections = %v, want 1", got)
 	}
 }
 
