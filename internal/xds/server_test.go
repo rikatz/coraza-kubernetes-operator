@@ -32,7 +32,6 @@ import (
 
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	extensionv3 "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
-	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -40,6 +39,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+
+	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 )
 
 const (
@@ -61,6 +62,13 @@ type streamFixture struct {
 }
 
 func newStreamFixture(t *testing.T) *streamFixture {
+	t.Helper()
+	limits := DefaultLimits()
+	limits.StreamMaxLifetime = time.Hour
+	return newStreamFixtureWithLimits(t, limits)
+}
+
+func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
 	t.Helper()
 
 	identity := Identity{Namespace: testNamespace, Name: "gateway", UID: "sa-uid"}
@@ -100,13 +108,11 @@ func newStreamFixture(t *testing.T) *streamFixture {
 		RefreshedAt:  time.Now(),
 	}
 
-	limits := DefaultLimits()
-	limits.StreamMaxLifetime = time.Hour
 	auth := authzTokenReviewer(fakeClient)
 	streams := NewStreamRegistry(auth, authz, limits, metrics)
 	authz.SetRevoker(streams)
 
-	server := NewServer(store, auth, authz, streams, limits, metrics, logr.Discard())
+	server := NewServer(store, auth, authz, streams, limits, metrics)
 
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer(grpc.StreamInterceptor(server.StreamInterceptor()))
@@ -193,7 +199,19 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 	fixture := newStreamFixture(t)
 	fixture.store.Replace(fixture.snapshot("v1"))
 
-	stream := fixture.open(t, validToken, fixture.resourceName)
+	// The initial request carries a spoofed node.id; the server must pin the
+	// watch to the authorized Engine, not the client-supplied identity.
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+validToken)
+	stream, err := fixture.client.StreamExtensionConfigs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		Node:          &corev3.Node{Id: "spoofed"},
+		ResourceNames: []string{fixture.resourceName},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	first := recv(t, stream)
 	if first.GetVersionInfo() != "sha256:v1" {
 		t.Fatalf("version_info = %q, want sha256:v1", first.GetVersionInfo())
@@ -201,7 +219,7 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 	if first.GetNonce() != "1" {
 		t.Fatalf("nonce = %q, want 1", first.GetNonce())
 	}
-	if first.GetTypeUrl() != TypeURL || len(first.GetResources()) != 1 {
+	if first.GetTypeUrl() != resource.ExtensionConfigType || len(first.GetResources()) != 1 {
 		t.Fatalf("response = %+v", first)
 	}
 
@@ -350,6 +368,56 @@ func TestStreamRevokedWhenAuthorizationIsRemoved(t *testing.T) {
 	fixture.authz.RevokeAndNotify(fixture.resourceName)
 	if code := recvCode(t, stream); code != codes.PermissionDenied {
 		t.Fatalf("code = %v, want PermissionDenied", code)
+	}
+}
+
+func TestStreamUnavailableWhenServerShutsDown(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.store.Replace(fixture.snapshot("v1"))
+
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	_ = recv(t, stream)
+
+	fixture.streams.CloseAll()
+	if code := recvCode(t, stream); code != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", code)
+	}
+}
+
+func TestStreamUnauthenticatedWhenRevalidationFails(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.store.Replace(fixture.snapshot("v1"))
+
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	_ = recv(t, stream)
+
+	fixture.setTokenValid(false)
+	fixture.streams.revalidateAll(context.Background())
+	if code := recvCode(t, stream); code != codes.Unauthenticated {
+		t.Fatalf("code = %v, want Unauthenticated", code)
+	}
+}
+
+func TestStreamRejectsIdleStreamBeyondLimit(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxStreams = 1
+	limits.StreamMaxLifetime = time.Hour
+	fixture := newStreamFixtureWithLimits(t, limits)
+	fixture.store.Replace(fixture.snapshot("v1"))
+
+	// The first stream occupies the only slot.
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	_ = recv(t, stream)
+
+	// A second stream that never sends a request must still hit the cap at
+	// open time, before authentication could ever run.
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+validToken)
+	idle, err := fixture.client.StreamExtensionConfigs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := recvCode(t, idle); code != codes.ResourceExhausted {
+		t.Fatalf("code = %v, want ResourceExhausted", code)
 	}
 }
 

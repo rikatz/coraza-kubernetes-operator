@@ -65,32 +65,20 @@ spec:
 
 Lower values mean faster rule updates but slightly more network traffic between the WASM plugin and the cache server.
 
-## Using a Custom WASM Image
+## Selecting the WASM Module
 
-By default, the operator uses its built-in WASM plugin image. To use a custom image, specify it in the Engine:
-
-```yaml
-spec:
-  driver:
-    type: wasm
-    wasm:
-      image: "oci://ghcr.io/my-org/coraza-proxy-wasm:v1.0.0"
-```
-
-The image must use the `oci://` URI scheme.
-
-If the image is in a private registry, provide an image pull secret:
+By default, the operator serves its own bundled WASM module; no module reference is needed. To use a custom module, specify an HTTPS URL together with its SHA-256 digest:
 
 ```yaml
 spec:
   driver:
     type: wasm
     wasm:
-      image: "oci://my-registry.example.com/coraza-proxy-wasm:v1.0.0"
-      imagePullSecret: my-registry-credentials
+      url: "https://files.example.com/coraza-proxy-wasm/v1.0.0/plugin.wasm"
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ```
 
-The Secret must exist in the same namespace as the Engine.
+The `url` and `sha256` fields must be set together: `url` must be an HTTPS URL without query or fragment, and `sha256` must be the 64-character lowercase hexadecimal SHA-256 of the raw WASM bytes served at `url`. Omit both fields (or set `wasm: {}`) to use the bundled module.
 
 ## Verifying the Engine
 

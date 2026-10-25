@@ -23,9 +23,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// TypeURL is the type URL of the single resource kind served over ECDS.
-const TypeURL = "type.googleapis.com/envoy.config.core.v3.TypedExtensionConfig"
-
 // resourceNamePrefix is the shared CKO/plugin resource naming prefix.
 const resourceNamePrefix = "coraza.waf."
 
