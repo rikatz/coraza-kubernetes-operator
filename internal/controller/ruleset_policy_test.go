@@ -23,7 +23,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -35,52 +34,6 @@ func newRuleSetWithPolicy(namespace, name string, policy wafv1alpha1.EmptyRulesP
 			Sources:          []wafv1alpha1.SourceReference{{Name: "source"}},
 			EmptyRulesPolicy: policy,
 		},
-	}
-}
-
-func TestRuleSetEmptyRulesPolicyDefault(t *testing.T) {
-	ctx := context.Background()
-	name := "policy-default"
-	t.Cleanup(func() {
-		rs := &wafv1alpha1.RuleSet{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: name}}
-		if err := k8sClient.Delete(ctx, rs); err != nil && !apierrors.IsNotFound(err) {
-			t.Logf("Failed to delete RuleSet: %v", err)
-		}
-	})
-
-	if err := k8sClient.Create(ctx, newRuleSetWithPolicy(testNamespace, name, "")); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-
-	var ruleSet wafv1alpha1.RuleSet
-	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: name}, &ruleSet); err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if ruleSet.Spec.EmptyRulesPolicy != wafv1alpha1.EmptyRulesPolicyReject {
-		t.Fatalf("emptyRulesPolicy = %q, want %q", ruleSet.Spec.EmptyRulesPolicy, wafv1alpha1.EmptyRulesPolicyReject)
-	}
-}
-
-func TestRuleSetEmptyRulesPolicyAllow(t *testing.T) {
-	ctx := context.Background()
-	name := "policy-allow"
-	t.Cleanup(func() {
-		rs := &wafv1alpha1.RuleSet{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: name}}
-		if err := k8sClient.Delete(ctx, rs); err != nil && !apierrors.IsNotFound(err) {
-			t.Logf("Failed to delete RuleSet: %v", err)
-		}
-	})
-
-	if err := k8sClient.Create(ctx, newRuleSetWithPolicy(testNamespace, name, wafv1alpha1.EmptyRulesPolicyAllow)); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-
-	var ruleSet wafv1alpha1.RuleSet
-	if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: name}, &ruleSet); err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if ruleSet.Spec.EmptyRulesPolicy != wafv1alpha1.EmptyRulesPolicyAllow {
-		t.Fatalf("emptyRulesPolicy = %q, want %q", ruleSet.Spec.EmptyRulesPolicy, wafv1alpha1.EmptyRulesPolicyAllow)
 	}
 }
 

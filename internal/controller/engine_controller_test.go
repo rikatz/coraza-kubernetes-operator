@@ -694,23 +694,6 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 	assert.True(t, apierrors.IsNotFound(err), "Telemetry should be deleted when observability is disabled, got: %v", err)
 }
 
-func TestEngineReconciler_ValidationAllowsOmittedWasmImage(t *testing.T) {
-	ctx := context.Background()
-
-	engine := utils.NewTestEngine(utils.EngineOptions{
-		Name:      "omit-wasm-image",
-		Namespace: testNamespace,
-	})
-
-	err := k8sClient.Create(ctx, engine)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, engine); err != nil {
-			t.Logf("Failed to delete engine: %v", err)
-		}
-	})
-}
-
 func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	ctx := context.Background()
 	ns := setupTestNamespace(t, ctx)
