@@ -131,14 +131,15 @@ func TestRuleSetContentHash(t *testing.T) {
 
 func TestRenderGoldenPayload(t *testing.T) {
 	input := newEngineInput(t, assemble.Content{
-		Rules: "SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\"",
+		Rules:     "SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\"",
+		DataFiles: map[string][]byte{"blocked.txt": []byte("attack\n")},
 	})
 	input.EnableFilterStateLogs = true
 
 	artifact, err := render.Render(input)
 	require.NoError(t, err)
 
-	want := `{"directives_map":{"default":["SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\""]},"default_directives":"default","failure_policy":"fail","metric_labels":{"engine":"checkout","namespace":"shop","uid":"11111111-1111-4111-8111-111111111111"},"enable_filter_state_logs":true}`
+	want := `{"schema_version":1,"engine":"checkout","namespace":"shop","engine_uid":"11111111-1111-4111-8111-111111111111","driver_type":"wasm","empty_rules_policy":"Reject","failure_policy":"fail","enable_filter_state_logs":true,"rules":"SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\"","data_files":{"blocked.txt":"YXR0YWNrCg=="}}`
 	assert.Equal(t, want, string(artifact.Payload))
 	assert.Equal(t, testResourceRef, artifact.ResourceName)
 	assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, artifact.Version)
@@ -199,8 +200,9 @@ func TestRenderEmptyRulesPolicy(t *testing.T) {
 
 		artifact, err := render.Render(input)
 		require.NoError(t, err)
-		assert.Contains(t, string(artifact.Payload), `"directives_map":{"default":["SecRuleEngine Off\n"]}`)
-		assert.Contains(t, string(artifact.Payload), `"default_directives":"default"`)
+		assert.Contains(t, string(artifact.Payload), `"rules":""`)
+		assert.Contains(t, string(artifact.Payload), `"data_files":{}`)
+		assert.Contains(t, string(artifact.Payload), `"empty_rules_policy":"Allow"`)
 	})
 }
 
@@ -299,14 +301,41 @@ func TestRenderRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestRenderRejectsDataFiles(t *testing.T) {
+func TestRenderDataFiles(t *testing.T) {
+	files := map[string][]byte{
+		"some.data": []byte("evildata\nanotherevildata\n"),
+		"aaa.data":  []byte("alpha"),
+	}
 	input := newEngineInput(t, assemble.Content{
-		Rules:     "SecRuleEngine On",
-		DataFiles: map[string][]byte{"blocked.txt": []byte("attack")},
+		Rules:     "SecRule ARGS \"@pmFromFile some.data\" \"id:3002,phase:2,deny,status:403\"",
+		DataFiles: files,
 	})
 
-	_, err := render.Render(input)
-	require.ErrorContains(t, err, "RuleData delivery is a follow-up")
+	artifact, err := render.Render(input)
+	require.NoError(t, err)
+
+	// Canonical JSON sorts keys, so data_files order is deterministic.
+	assert.Contains(t, string(artifact.Payload),
+		`"data_files":{"aaa.data":"YWxwaGE=","some.data":"ZXZpbGRhdGEKYW5vdGhlcmV2aWxkYXRhCg=="}`)
+	assert.Contains(t, string(artifact.Payload), `"schema_version":1`)
+	assert.Contains(t, string(artifact.Payload), `"rules":"SecRule ARGS \"@pmFromFile some.data\"`)
+
+	// RuleData is delivered in the payload only; the module stays remote and
+	// digest-pinned.
+	var wasmFilter wasmhttp.Wasm
+	require.NoError(t, artifact.Resource.TypedConfig.UnmarshalTo(&wasmFilter))
+	remote := wasmFilter.Config.GetVmConfig().GetCode().GetRemote()
+	require.NotNil(t, remote)
+	assert.Equal(t, testBinaryURL, remote.HttpUri.Uri)
+	assert.Equal(t, testBinarySHA, remote.Sha256)
+
+	changed := newEngineInput(t, assemble.Content{
+		Rules:     input.Content.Rules,
+		DataFiles: map[string][]byte{"some.data": []byte("other\n")},
+	})
+	changedArtifact, err := render.Render(changed)
+	require.NoError(t, err)
+	assert.NotEqual(t, artifact.Version, changedArtifact.Version)
 }
 
 func TestMatches(t *testing.T) {

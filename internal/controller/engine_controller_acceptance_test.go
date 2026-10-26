@@ -46,6 +46,9 @@ import (
 const (
 	testAssetBaseURL   = "https://coraza-operator.coraza-system.svc.cluster.local:18080"
 	testAcceptRuleText = `SecRule REQUEST_URI "@contains /admin" "id:1,phase:1,deny,status:403"`
+	// testAcceptDataRuleText references a RuleData file, so acceptance exercises
+	// RuleData delivery through the rendered payload.
+	testAcceptDataRuleText = `SecRule ARGS "@pmFromFile some.data" "id:2,phase:2,deny,status:403"`
 )
 
 const testCAPEM = "-----BEGIN CERTIFICATE-----\nMIIBtestCa\n-----END CERTIFICATE-----\n"
@@ -75,7 +78,7 @@ func acceptTestRuleSet(t *testing.T, ctx context.Context, ruleSet *wafv1alpha1.R
 		}
 	}
 	for _, ref := range ruleSet.Spec.Data {
-		data := utils.NewTestRuleData(ref.Name, ruleSet.Namespace, map[string]string{})
+		data := utils.NewTestRuleData(ref.Name, ruleSet.Namespace, map[string]string{"some.data": "evildata\n"})
 		if err := k8sClient.Create(ctx, data); err != nil && !apierrors.IsAlreadyExists(err) {
 			require.NoError(t, err)
 		}
@@ -329,9 +332,13 @@ func TestEngineReconciler_AcceptsConfigurationAndAttachesEnvoyFilter(t *testing.
 	ns := setupTestNamespace(t, ctx)
 	createTestGateway(t, ctx, k8sClient, "accept-gw", ns)
 
-	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{Name: "accept-ruleset", Namespace: ns})
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "accept-ruleset",
+		Namespace: ns,
+		Data:      []wafv1alpha1.DataReference{{Name: "accept-data"}},
+	})
 	require.NoError(t, k8sClient.Create(ctx, ruleSet))
-	acceptTestRuleSet(t, ctx, ruleSet, testAcceptRuleText)
+	acceptTestRuleSet(t, ctx, ruleSet, testAcceptRuleText+"\n"+testAcceptDataRuleText)
 
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:        "accept-engine",

@@ -43,22 +43,18 @@ import (
 )
 
 const (
+	// SchemaVersion is the runtime configuration schema version understood by
+	// the ECDS-aware plugin.
+	SchemaVersion = 1
 	// RenderingSchemaVersion is the rendering schema version. It is part of
-	// every engine version hash. Version 2 renders the upstream
-	// coraza-proxy-wasm plugin configuration instead of the former
-	// operator-specific payload.
-	RenderingSchemaVersion = 2
+	// every engine version hash. Version 3 restores the schema-versioned
+	// payload that carries RuleData files.
+	RenderingSchemaVersion = 3
 
 	defaultDriverType    = "wasm"
 	defaultFailurePolicy = "fail"
 	defaultRuntime       = "envoy.wasm.runtime.v8"
 	defaultCodeTimeout   = 10 * time.Second
-
-	// defaultDirectivesName is the key of the only directives entry rendered.
-	defaultDirectivesName = "default"
-	// noOpRules is an intentional no-op WAF for an empty RuleSet that opted in
-	// to EmptyRulesPolicy Allow.
-	noOpRules = "SecRuleEngine Off\n"
 	// wasmCluster is the Envoy cluster that serves the WASM binary. The
 	// cluster is installed by the EnvoyFilter in a later phase.
 	wasmCluster = "coraza_wasm"
@@ -219,27 +215,26 @@ func Render(in EngineInput) (Artifact, error) {
 	runtime, vmID, codeTimeout := resolveVMSettings(in.VMSettings, in.UID)
 	resourceName := resourceName(in.Namespace, in.Name, in.UID)
 
-	// The bundled plugin is upstream coraza-proxy-wasm, which resolves data
-	// files only from its compiled-in CoreRuleSet. Refuse rather than publish a
-	// payload whose @pmFromFile references can never resolve.
-	if len(in.Content.DataFiles) > 0 {
-		return Artifact{}, fmt.Errorf("RuleSet has %d data file(s), but the bundled plugin supports only rule text: RuleData delivery is a follow-up", len(in.Content.DataFiles))
+	// The payload carries the RuleData files so the plugin can rebuild a WAF
+	// whose @pmFromFile references resolve.
+	dataFiles := make(map[string][]byte, len(in.Content.DataFiles))
+	for name, data := range in.Content.DataFiles {
+		if data == nil {
+			data = []byte{}
+		}
+		dataFiles[name] = data
 	}
-
-	rules := in.Content.Rules
-	if strings.TrimSpace(rules) == "" {
-		rules = noOpRules
-	}
-	payload, err := CanonicalJSON(pluginConfig{
-		DirectivesMap:     map[string][]string{defaultDirectivesName: {rules}},
-		DefaultDirectives: defaultDirectivesName,
-		FailurePolicy:     failurePolicy,
-		MetricLabels: map[string]string{
-			"engine":    in.Name,
-			"namespace": in.Namespace,
-			"uid":       string(in.UID),
-		},
+	payload, err := CanonicalJSON(runtimeConfig{
+		SchemaVersion:         SchemaVersion,
+		Engine:                in.Name,
+		Namespace:             in.Namespace,
+		EngineUID:             string(in.UID),
+		DriverType:            driverType,
+		EmptyRulesPolicy:      emptyRulesPolicy,
+		FailurePolicy:         failurePolicy,
 		EnableFilterStateLogs: in.EnableFilterStateLogs,
+		Rules:                 in.Content.Rules,
+		DataFiles:             dataFiles,
 	})
 	if err != nil {
 		return Artifact{}, fmt.Errorf("render runtime configuration: %w", err)
@@ -304,15 +299,18 @@ func Matches(accepted AcceptedEngine, a Artifact) error {
 	return nil
 }
 
-// pluginConfig is the upstream coraza-proxy-wasm configuration carried in the
-// ECDS Wasm.config.configuration StringValue. The plugin is used unmodified, so
-// the payload must stay within its documented keys.
-type pluginConfig struct {
-	DirectivesMap         map[string][]string `json:"directives_map"`
-	DefaultDirectives     string              `json:"default_directives"`
-	FailurePolicy         string              `json:"failure_policy"`
-	MetricLabels          map[string]string   `json:"metric_labels"`
-	EnableFilterStateLogs bool                `json:"enable_filter_state_logs"`
+// runtimeConfig is the schema_version 1 JSON passed to the plugin.
+type runtimeConfig struct {
+	SchemaVersion         int               `json:"schema_version"`
+	Engine                string            `json:"engine"`
+	Namespace             string            `json:"namespace"`
+	EngineUID             string            `json:"engine_uid"`
+	DriverType            string            `json:"driver_type"`
+	EmptyRulesPolicy      string            `json:"empty_rules_policy"`
+	FailurePolicy         string            `json:"failure_policy"`
+	EnableFilterStateLogs bool              `json:"enable_filter_state_logs"`
+	Rules                 string            `json:"rules"`
+	DataFiles             map[string][]byte `json:"data_files"`
 }
 
 type vmVersion struct {
@@ -322,6 +320,7 @@ type vmVersion struct {
 }
 
 type engineVersionInput struct {
+	SchemaVersion          int       `json:"schema_version"`
 	RenderingSchemaVersion int       `json:"rendering_schema_version"`
 	Engine                 string    `json:"engine"`
 	Namespace              string    `json:"namespace"`
@@ -339,6 +338,7 @@ type engineVersionInput struct {
 
 func engineVersion(in EngineInput, driverType, emptyRulesPolicy, failurePolicy, runtime, vmID string, codeTimeout time.Duration) (string, error) {
 	raw, err := CanonicalJSON(engineVersionInput{
+		SchemaVersion:          SchemaVersion,
 		RenderingSchemaVersion: RenderingSchemaVersion,
 		Engine:                 in.Name,
 		Namespace:              in.Namespace,

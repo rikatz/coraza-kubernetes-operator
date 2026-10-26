@@ -7,7 +7,7 @@ Kubernetes Gateway API and Istio.
 
 | File | Description |
 |------|-------------|
-| `ruleset.yaml` | `RuleSource` (SecLang rules) and a `RuleSet` referencing them via `spec.sources`. `RuleData` is not delivered by the bundled plugin yet, so the demo keeps to rule text |
+| `ruleset.yaml` | `RuleSource` (SecLang rules), `RuleData` (`@pmFromFile` data files), and a `RuleSet` referencing them via `spec.sources` and `spec.data` |
 | `engine.yaml` | `Engine` CR that references the RuleSet and targets an Istio Gateway (`spec.driver.wasm.image` is optional) |
 | `gateway.yaml` | Kubernetes Gateway API `Gateway` using the Istio gateway class (**not** in `kustomization.yaml`; apply separately on generic clusters) |
 | `httproute.yaml` | `HTTPRoute` that sends all traffic through the gateway to the echo service |

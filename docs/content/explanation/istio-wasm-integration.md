@@ -29,12 +29,13 @@ Gateway whose Engine is not accepted never forwards traffic unfiltered.
 
 ## The plugin
 
-The WASM module is the upstream
-[coraza-proxy-wasm](https://github.com/corazawaf/coraza-proxy-wasm), unmodified. It runs the
+The WASM module is an ECDS-aware build of
+[coraza-proxy-wasm](https://github.com/corazawaf/coraza-proxy-wasm). It runs the
 Coraza WAF engine inside Envoy and blocks or allows requests based on the rules it is given.
 
-The operator's ECDS resource is the plugin's own configuration: the assembled SecLang text,
-the failure policy, and the metric labels. The module itself is referenced by URL and digest. See the [ECDS plugin
+The operator's ECDS resource is the plugin's schema-versioned configuration: the assembled
+SecLang text, the RuleData files, the failure policy, and the engine identity. The module
+itself is referenced by URL and digest. See the [ECDS plugin
 contract]({{< relref "/reference/ecds-plugin-contract" >}}) for the exact payload.
 
 ## Rule updates

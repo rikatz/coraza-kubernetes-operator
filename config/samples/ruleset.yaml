@@ -70,6 +70,36 @@ spec:
       severity:'CRITICAL'"
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: no-evil-data
+spec:
+  rules: |
+    SecRule ARGS|REQUEST_URI|REQUEST_HEADERS "@pmFromFile some.data" \
+      "id:3002,\
+      phase:2,\
+      deny,\
+      status:403,\
+      t:none,t:urlDecodeUni,\
+      msg:'Evil Monkey Detected',\
+      logdata:'Matched Data: %{MATCHED_VAR} found within %{MATCHED_VAR_NAME}',\
+      tag:'application-multi',\
+      tag:'language-multi',\
+      tag:'platform-multi',\
+      tag:'monkey-attack',\
+      severity:'CRITICAL'"
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleData
+metadata:
+  name: datafile
+spec:
+  files:
+    some.data: |
+      evildata
+      anotherevildata
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSet
 metadata:
   name: default-ruleset
@@ -79,3 +109,6 @@ spec:
     - name: sqli-rules
     - name: xss-rules
     - name: no-evil-monkeys
+    - name: no-evil-data
+  data:
+    - name: datafile
