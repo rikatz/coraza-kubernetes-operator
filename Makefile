@@ -214,7 +214,7 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 # local worktree of it to build without publishing anything, e.g.:
 #   make demo WASM_PLUGIN_DIR=/path/to/coraza-proxy-wasm-ecds
 WASM_PLUGIN_REPO ?= https://github.com/corazawaf/coraza-proxy-wasm
-WASM_PLUGIN_VERSION ?= 75579c7
+WASM_PLUGIN_VERSION ?= d62cf9b
 WASM_PLUGIN_DIR ?= $(CURDIR)/.cache/coraza-proxy-wasm
 # TinyGo 0.34 supports Go 1.19-1.23 only; pin the toolchain the plugin builds with.
 WASM_GO_TOOLCHAIN ?= go1.23.12
