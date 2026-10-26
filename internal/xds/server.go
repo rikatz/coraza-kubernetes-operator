@@ -22,11 +22,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	extensionconfigservice "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
 	xdsserver "github.com/envoyproxy/go-control-plane/pkg/server/v3"
+	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -36,7 +38,16 @@ import (
 const (
 	authorizationHeader        = "authorization"
 	invalidSubscriptionMessage = "invalid subscription"
+
+	// nackRetryLimit bounds how many times one rejected version is retried.
+	nackRetryLimit = 3
 )
+
+// nackState tracks retries for one ECDS resource's current version.
+type nackState struct {
+	version  string
+	attempts int
+}
 
 // lifecycleKey carries the stream's cancel function from the interceptor into
 // the go-control-plane callbacks, which have no other way to close a stream.
@@ -59,21 +70,29 @@ type Server struct {
 	Streams *StreamRegistry
 	Limits  Limits
 	Metrics *Metrics
+	Logger  logr.Logger
+
+	// RetryDelay waits before closing a stream whose configuration Envoy
+	// rejected, so the remote module fetch it triggered can finish.
+	RetryDelay time.Duration
 
 	srv xdsserver.Server
 
 	streams     sync.Map // int64 -> *serverStream
+	nacks       sync.Map // resource name -> nackState
 	openStreams atomic.Int64
 }
 
 // NewServer wires the go-control-plane server around the snapshot cache.
 func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, streams *StreamRegistry, limits Limits, metrics *Metrics) *Server {
 	s := &Server{
-		Auth:    auth,
-		Authz:   authz,
-		Streams: streams,
-		Limits:  limits.withDefaults(),
-		Metrics: metrics,
+		Auth:       auth,
+		Authz:      authz,
+		Streams:    streams,
+		Limits:     limits.withDefaults(),
+		Metrics:    metrics,
+		Logger:     logr.Discard(),
+		RetryDelay: 3 * time.Second,
 	}
 	s.srv = xdsserver.NewServer(context.Background(), store.cache, xdsserver.CallbackFuncs{
 		StreamOpenFunc:    s.onStreamOpen,
@@ -96,7 +115,7 @@ func lifecycleStatus(cause error) error {
 		return status.Error(codes.PermissionDenied, "resource is not authorized")
 	case ErrRevalidateFailed:
 		return status.Error(codes.Unauthenticated, "authentication failed")
-	case ErrLifetimeExpired, ErrServerShutdown:
+	case ErrLifetimeExpired, ErrServerShutdown, ErrResubscribe:
 		return status.Error(codes.Unavailable, "stream must be re-established")
 	}
 	return nil
@@ -113,6 +132,9 @@ func (s *Server) StreamInterceptor() grpc.StreamServerInterceptor {
 			ctx:          context.WithValue(ctx, lifecycleKey{}, cancel),
 		}
 		err := handler(srv, wrapped)
+		if err != nil || ctx.Err() != nil {
+			s.Logger.V(1).Info("ECDS stream ended", "err", err, "cause", context.Cause(ctx))
+		}
 		if ctx.Err() != nil {
 			if mapped := lifecycleStatus(context.Cause(ctx)); mapped != nil {
 				return mapped
@@ -215,6 +237,7 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 
 	if req.GetErrorDetail() != nil {
 		s.Metrics.Nack("rejected")
+		s.retryRejected(entry, req.GetVersionInfo())
 		return nil
 	}
 
@@ -240,14 +263,18 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		// failed authorization ends the stream, so the entry is never reused.
 		entry.resourceName = name
 		s.Streams.SetResource(entry.session.ID, name)
+		// Authorization is retryable: the mapping is rebuilt on Engine and pod
+		// events, and Envoy treats PermissionDenied as terminal for a
+		// subscription, which would leave the filter fail-closed for good.
 		if !s.Authz.Authorize(name, entry.identity) {
 			s.Metrics.AuthFailure("unauthorized")
-			return status.Error(codes.PermissionDenied, "resource is not authorized")
+			s.Logger.Info("ECDS subscription not authorized yet", "resource", name, "identity", entry.identity.Key(), "uid", entry.identity.UID)
+			return status.Error(codes.Unavailable, "authorization is not ready")
 		}
 		engineKey, ok := s.Authz.EngineKey(name)
 		if !ok {
 			s.Metrics.AuthFailure("unauthorized")
-			return status.Error(codes.PermissionDenied, "resource is not authorized")
+			return status.Error(codes.Unavailable, "authorization is not ready")
 		}
 		// The cache is keyed by node.id, which the client controls. Rewrite it
 		// to the authorized Engine key before CreateWatch runs.
@@ -263,6 +290,31 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		s.Metrics.Ack()
 	}
 	return nil
+}
+
+// retryRejected makes a NACKed client resubscribe. A cold proxy rejects the
+// first ECDS push because the remote WASM module is not cached yet, and Envoy
+// never asks for that resource again on its own; closing the stream after the
+// background fetch has had time to finish gives it a fresh subscription.
+func (s *Server) retryRejected(entry *serverStream, rejectedVersion string) {
+	if entry.resourceName == "" {
+		return
+	}
+	state := nackState{version: rejectedVersion}
+	if prev, ok := s.nacks.Load(entry.resourceName); ok {
+		if current, ok := prev.(nackState); ok && current.version == rejectedVersion {
+			state = current
+		}
+	}
+	state.attempts++
+	s.nacks.Store(entry.resourceName, state)
+	if state.attempts > nackRetryLimit {
+		s.Logger.Info("ECDS retry budget exhausted", "resource", entry.resourceName, "version", rejectedVersion)
+		return
+	}
+	s.Logger.Info("resubscribing NACKed configuration", "resource", entry.resourceName, "attempt", state.attempts)
+	sessionID := entry.session.ID
+	time.AfterFunc(s.RetryDelay, func() { s.Streams.ResetStream(sessionID) })
 }
 
 func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {

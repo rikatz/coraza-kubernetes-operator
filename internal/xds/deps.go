@@ -82,6 +82,7 @@ func NewDependencies(config Config) (*Dependencies, error) {
 	authz.SetRevoker(streams)
 
 	server := NewServer(store, auth, authz, streams, limits, metrics)
+	server.Logger = logger.WithName("xds")
 
 	manifest, data, assetErr := assets.ResolveDefault()
 	metrics.SetManifestVerified(assetErr == nil)

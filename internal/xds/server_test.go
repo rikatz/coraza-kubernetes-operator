@@ -243,30 +243,43 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 	}
 }
 
-func TestStreamNackDoesNotResendTheSameVersion(t *testing.T) {
+func TestStreamNackForcesResubscribe(t *testing.T) {
 	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = 0
 	fixture.store.Replace(fixture.snapshot("v1"))
 
+	nack := func(stream extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient, resp *discoveryv3.DiscoveryResponse) {
+		t.Helper()
+		if err := stream.Send(&discoveryv3.DiscoveryRequest{
+			ResourceNames: []string{fixture.resourceName},
+			VersionInfo:   resp.GetVersionInfo(),
+			ResponseNonce: resp.GetNonce(),
+			ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A cold proxy rejects the first push because the remote module is not
+	// cached. The server closes the stream so Envoy resubscribes after the
+	// background fetch, instead of waiting for a version nobody sends.
+	for attempt := 1; attempt <= nackRetryLimit; attempt++ {
+		stream := fixture.open(t, validToken, fixture.resourceName)
+		first := recv(t, stream)
+		if first.GetVersionInfo() != "sha256:v1" {
+			t.Fatalf("version_info = %q, want sha256:v1", first.GetVersionInfo())
+		}
+		nack(stream, first)
+		if code := recvCode(t, stream); code != codes.Unavailable {
+			t.Fatalf("attempt %d: stream code = %v, want Unavailable", attempt, code)
+		}
+	}
+
+	// The retry budget is bounded: a fourth rejection keeps the stream open.
 	stream := fixture.open(t, validToken, fixture.resourceName)
-	first := recv(t, stream)
-
-	if err := stream.Send(&discoveryv3.DiscoveryRequest{
-		ResourceNames: []string{fixture.resourceName},
-		VersionInfo:   first.GetVersionInfo(),
-		ResponseNonce: first.GetNonce(),
-		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	pending := startRecv(stream)
-	expectNoResult(t, pending, 150*time.Millisecond)
-
-	fixture.store.Replace(fixture.snapshot("v2"))
-	second := expectResult(t, pending)
-	if second.GetVersionInfo() != "sha256:v2" {
-		t.Fatalf("version_info = %q, want sha256:v2", second.GetVersionInfo())
-	}
+	last := recv(t, stream)
+	nack(stream, last)
+	expectNoResult(t, startRecv(stream), 150*time.Millisecond)
 }
 
 func TestStreamRejectsWildcardAndMultipleResources(t *testing.T) {
@@ -320,8 +333,8 @@ func TestStreamRequiresAuthenticationAndAuthorization(t *testing.T) {
 
 	t.Run("unknown and unauthorized look the same", func(t *testing.T) {
 		unknown := fixture.open(t, validToken, ResourceName(testNamespace, "other", types.UID("other-uid")))
-		if code := recvCode(t, unknown); code != codes.PermissionDenied {
-			t.Fatalf("unknown resource code = %v, want PermissionDenied", code)
+		if code := recvCode(t, unknown); code != codes.Unavailable {
+			t.Fatalf("unknown resource code = %v, want Unavailable", code)
 		}
 	})
 }
@@ -342,8 +355,8 @@ func TestStreamIgnoresNodeIdentity(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if code := recvCode(t, stream); code != codes.PermissionDenied {
-		t.Fatalf("code = %v, want PermissionDenied", code)
+	if code := recvCode(t, stream); code != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", code)
 	}
 }
 
