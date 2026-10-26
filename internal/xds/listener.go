@@ -88,7 +88,7 @@ type Listener struct {
 // servers, and returns a listener that binds when started.
 func NewListener(config ListenerConfig, server *Server, handler http.Handler, limits Limits, logger logr.Logger) (*Listener, error) {
 	config = config.withDefaults()
-	limits = limits.withDefaults()
+	limits = limits.WithDefaults()
 
 	certs, err := newCertificateReloader(config.CertDir, config.CertName, config.KeyName, logger)
 	if err != nil {

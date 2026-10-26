@@ -19,11 +19,15 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -267,10 +271,28 @@ func TestPublicationReconcilerSetupWithoutLeaderElection(t *testing.T) {
 		"publication must run on every replica (NeedLeaderElection=false)")
 }
 
+// sentMessageBytes returns the size of the Response the ECDS server puts on the
+// wire for artifact: go-control-plane wraps the resource in an Any inside a
+// DiscoveryResponse and adds a version, type URL and nonce.
+func sentMessageBytes(t *testing.T, artifact render.Artifact) int {
+	t.Helper()
+
+	resource, err := anypb.New(artifact.Resource)
+	require.NoError(t, err)
+	raw, err := proto.Marshal(&discoveryv3.DiscoveryResponse{
+		VersionInfo: artifact.Version,
+		Resources:   []*anypb.Any{resource},
+		TypeUrl:     "type.googleapis.com/envoy.config.core.v3.TypedExtensionConfig",
+		Nonce:       "9223372036854775807",
+	})
+	require.NoError(t, err)
+	return len(raw)
+}
+
 // TestDefaultLimitsDeliverMaxDecodedData pins the arithmetic behind
 // DefaultMaxDecodedDataBytes: the decoded-data limit, split across the maximum
-// number of maximum-length file names, still renders a payload the ECDS
-// message limit accepts.
+// number of maximum-length file names, still produces an ECDS response the gRPC
+// send limit accepts.
 func TestDefaultLimitsDeliverMaxDecodedData(t *testing.T) {
 	limits := xds.DefaultLimits()
 	files := make(map[string][]byte, limits.MaxDataFiles)
@@ -299,6 +321,45 @@ func TestDefaultLimitsDeliverMaxDecodedData(t *testing.T) {
 		Binary:  render.BinaryRef{URL: "https://example.com/plugin.wasm", SHA256: testSHA256},
 	})
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(artifact.Payload), limits.MaxMessageBytes)
-	require.NoError(t, validateRenderedPayload(artifact.Payload, limits))
+	require.LessOrEqual(t, sentMessageBytes(t, artifact), limits.MaxMessageBytes,
+		"the response actually sent must fit the gRPC limit, not only the payload")
+	require.NoError(t, validateRenderedPayload(artifact, limits))
+}
+
+// TestValidateRenderedPayloadReservesTheEnvelope pins the boundary: the largest
+// resource that still leaves room for the ECDS envelope is accepted, one byte
+// more is rejected.
+func TestValidateRenderedPayloadReservesTheEnvelope(t *testing.T) {
+	limits := xds.DefaultLimits()
+	limits.MaxMessageBytes = 8192
+
+	artifact := func(rules string) render.Artifact {
+		content := assemble.Content{Rules: rules}
+		hash, err := render.RuleSetContentHash(content)
+		require.NoError(t, err)
+		out, err := render.Render(render.EngineInput{
+			Namespace: "default",
+			Name:      "delivery-boundary",
+			UID:       "11111111-1111-4111-8111-111111111111",
+			RuleSet: render.RuleSetAccepted{
+				UID:         "22222222-2222-4222-8222-222222222222",
+				ContentHash: hash,
+			},
+			Content: content,
+			Binary:  render.BinaryRef{URL: "https://example.com/plugin.wasm", SHA256: testSHA256},
+		})
+		require.NoError(t, err)
+		return out
+	}
+
+	room := limits.MaxMessageBytes - messageEnvelopeBytes - proto.Size(artifact(publicationRules).Resource)
+	require.Positive(t, room)
+
+	atLimit := artifact(publicationRules + strings.Repeat("x", room))
+	require.Equal(t, limits.MaxMessageBytes-messageEnvelopeBytes, proto.Size(atLimit.Resource))
+	require.NoError(t, validateRenderedPayload(atLimit, limits))
+	require.LessOrEqual(t, sentMessageBytes(t, atLimit), limits.MaxMessageBytes)
+
+	over := artifact(publicationRules + strings.Repeat("x", room+1))
+	require.ErrorContains(t, validateRenderedPayload(over, limits), "message limit of 8192")
 }

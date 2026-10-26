@@ -235,6 +235,9 @@ func truncateEventNote(msg string) string {
 // patchDegraded marks a resource as Degraded, emits a Warning event, and
 // patches the status in a single call. It consolidates the repeated pattern of
 // Eventf → DeepCopy → apply status → Status().Patch → logConditionTransitions on success.
+// Optional mutations run after the merge baseline is taken, so a caller can
+// drop fields (e.g. an accepted record that cannot be delivered) in the same
+// patch.
 func patchDegraded(
 	ctx context.Context,
 	statusWriter client.StatusWriter,
@@ -246,10 +249,14 @@ func patchDegraded(
 	conditions *[]metav1.Condition,
 	generation int64,
 	reason, message string,
+	mutate ...func(),
 ) error {
 	recorder.Eventf(obj, nil, "Warning", reason, "Reconcile", truncateEventNote(message))
 	patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
 	before := snapshotConditions(*conditions)
+	for _, m := range mutate {
+		m()
+	}
 	applyStatusConditionDegraded(conditions, generation, reason, message)
 	if err := statusWriter.Patch(ctx, obj, patch); err != nil {
 		logAPIError(log, req, kind, err, "Failed to patch status", obj)

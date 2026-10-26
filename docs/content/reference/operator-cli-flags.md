@@ -57,8 +57,8 @@ The operator serves Envoy Configuration Discovery Service (ECDS) streams and the
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--xds-max-message-bytes` | `16777216` (16 MiB) | Maximum gRPC message size for the ECDS server. |
-| `--xds-max-decoded-data-bytes` | `8388608` (8 MiB) | Maximum decoded RuleData bytes carried by one Engine. |
+| `--xds-max-message-bytes` | `16777216` (16 MiB) | Maximum gRPC message size for the ECDS server, including the ECDS envelope. The plugin accepts at most 16 MiB of payload. |
+| `--xds-max-decoded-data-bytes` | `8388608` (8 MiB) | Maximum decoded RuleData bytes carried by one Engine. RuleData is base64-encoded in the payload; 4096 maximum-length file names leave roughly 4.3 MiB of the 16 MiB message for rule text. The plugin accepts at most 12 MiB of decoded RuleData. |
 | `--xds-max-data-files` | `4096` | Maximum number of RuleData files carried by one Engine. |
 | `--xds-max-streams` | `512` | Maximum concurrent ECDS streams per replica. |
 | `--xds-max-streams-per-identity` | `8` | Maximum concurrent ECDS streams per authenticated ServiceAccount. |

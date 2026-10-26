@@ -63,7 +63,7 @@ type Dependencies struct {
 
 // NewDependencies builds the ECDS serving plane.
 func NewDependencies(config Config) (*Dependencies, error) {
-	limits := config.Limits.withDefaults()
+	limits := config.Limits.WithDefaults()
 	logger := config.Logger
 	if logger.GetSink() == nil {
 		logger = logr.Discard()
@@ -108,6 +108,7 @@ func NewDependencies(config Config) (*Dependencies, error) {
 	}
 
 	readiness := NewPublicationReadiness()
+	readiness.Logger = logger.WithName("xds-publication")
 
 	return &Dependencies{
 		Metrics:   metrics,

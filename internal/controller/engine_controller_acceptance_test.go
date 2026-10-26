@@ -329,10 +329,18 @@ func TestEngineReconciler_TLSNotConfiguredFailsClosed(t *testing.T) {
 }
 
 // newDeliveryLimitEngineFixture creates an accepted RuleSet (with one RuleData
-// file) and an Engine that references it.
+// object holding two files) and an Engine that references it.
 func newDeliveryLimitEngineFixture(t *testing.T, ctx context.Context, ns, name string) *wafv1alpha1.Engine {
 	t.Helper()
 	createTestGateway(t, ctx, k8sClient, name+"-gw", ns)
+
+	// Two files make the file-count limit testable with a limit that defaulting
+	// does not replace. acceptTestRuleSet keeps an already existing RuleData.
+	data := utils.NewTestRuleData(name+"-data", ns, map[string]string{
+		"some.data":  "evildata\n",
+		"other.data": "x",
+	})
+	require.NoError(t, k8sClient.Create(ctx, data))
 
 	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      name + "-ruleset",
@@ -386,12 +394,17 @@ func TestEngineReconciler_RejectsContentOverLimits(t *testing.T) {
 		{
 			name: "decoded RuleData bytes",
 			tune: func(l *xds.Limits) { l.MaxDecodedDataBytes = 4 },
-			want: "decoded RuleData size 9 exceeds the limit of 4",
+			want: "decoded RuleData size 10 exceeds the limit of 4",
 		},
 		{
 			name: "RuleData file count",
-			tune: func(l *xds.Limits) { l.MaxDataFiles = 0 },
-			want: "RuleData file count 1 exceeds the limit of 0",
+			tune: func(l *xds.Limits) { l.MaxDataFiles = 1 },
+			want: "RuleData file count 2 exceeds the limit of 1",
+		},
+		{
+			name: "rule text",
+			tune: func(l *xds.Limits) { l.MaxMessageBytes = 8 },
+			want: "rule text size 67 exceeds the message limit of 8",
 		},
 	}
 
@@ -426,6 +439,71 @@ func TestEngineReconciler_RejectsPayloadOverMessageLimit(t *testing.T) {
 	degraded := expectAcceptanceDegraded(t, ctx, reconciler, engine, "RenderFailed")
 	assert.Contains(t, degraded.Message, "exceeds delivery limits")
 	assert.Contains(t, degraded.Message, "message limit of 128")
+}
+
+// TestEngineReconciler_ClearsAcceptedConfigurationOverLimits covers a tenant
+// growing RuleData past the delivery limits after acceptance: the stale accepted
+// record must be cleared so readiness and the publisher stop tracking it.
+func TestEngineReconciler_ClearsAcceptedConfigurationOverLimits(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+	engine := newDeliveryLimitEngineFixture(t, ctx, ns, "grown")
+
+	limits := xds.DefaultLimits()
+	limits.MaxDecodedDataBytes = 100
+	reconciler := newAcceptedEngineTestReconciler()
+	reconciler.Limits = limits
+	reconcileEngine(t, ctx, reconciler, engine)
+
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+	engineKey := ns + "/" + engine.Name
+
+	var accepted wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &accepted))
+	require.NotNil(t, accepted.Status.AcceptedConfiguration, "the fixture must be accepted first")
+
+	publisher := newPublicationReconciler(t)
+	publisher.Limits = limits
+	_, err := publisher.Reconcile(ctx, request)
+	require.NoError(t, err)
+	_, ok := publisher.Store.Get(engineKey)
+	require.True(t, ok, "the accepted configuration must be published")
+
+	// The tenant grows RuleData past the limit and the RuleSet re-accepts it.
+	var ruleSet wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: engine.Spec.RuleSet.Name}, &ruleSet))
+	require.NotEmpty(t, ruleSet.Spec.Data)
+
+	var data wafv1alpha1.RuleData
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: ruleSet.Spec.Data[0].Name}, &data))
+	data.Spec.Files["some.data"] = strings.Repeat("a", 200)
+	require.NoError(t, k8sClient.Update(ctx, &data))
+	acceptTestRuleSet(t, ctx, &ruleSet, testAcceptDataRuleText)
+
+	_, err = reconciler.Reconcile(ctx, request)
+	require.Error(t, err)
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &updated))
+	require.NotNil(t, updated.Status)
+	assert.Nil(t, updated.Status.AcceptedConfiguration, "the stale accepted record must be cleared")
+
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+	assert.Contains(t, degraded.Message, "decoded RuleData size")
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, conditionReady)
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+
+	_, err = publisher.Reconcile(ctx, request)
+	require.NoError(t, err)
+	_, ok = publisher.Store.Get(engineKey)
+	assert.False(t, ok, "a cleared accepted record must delete the published snapshot")
+
+	readiness := xds.NewPublicationReadiness()
+	readiness.Initialize([]*wafv1alpha1.Engine{&updated})
+	assert.NoError(t, readiness.Check(), "a cleared record must not gate readiness")
 }
 
 func TestEngineReconciler_AcceptsConfigurationAndAttachesEnvoyFilter(t *testing.T) {

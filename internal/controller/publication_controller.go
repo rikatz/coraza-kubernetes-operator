@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -155,10 +156,7 @@ func (r *PublicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 }
 
 func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.NamespacedName, engine *wafv1alpha1.Engine, accepted *wafv1alpha1.EngineAcceptedConfiguration) error {
-	limits := r.Limits
-	if limits.MaxMessageBytes <= 0 {
-		limits = xds.DefaultLimits()
-	}
+	limits := r.Limits.WithDefaults()
 
 	var ruleset wafv1alpha1.RuleSet
 	if err := r.Get(ctx, types.NamespacedName{Namespace: engine.Namespace, Name: engine.Spec.RuleSet.Name}, &ruleset); err != nil {
@@ -226,7 +224,7 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 		return err
 	}
 
-	if err := validateRenderedPayload(artifact.Payload, limits); err != nil {
+	if err := validateRenderedPayload(artifact, limits); err != nil {
 		return err
 	}
 
@@ -333,7 +331,17 @@ func acceptedConfiguration(engine *wafv1alpha1.Engine) *wafv1alpha1.EngineAccept
 // Validation
 // -----------------------------------------------------------------------------
 
+// messageEnvelopeBytes reserves the DiscoveryResponse wrapper the xDS server
+// adds around a rendered resource (version_info, nonce, type_url, the
+// control-plane identifier and the Any framing). grpc.MaxSendMsgSize applies to
+// the whole message, so a resource that only fits without the wrapper is Ready
+// but undeliverable.
+const messageEnvelopeBytes = 1 << 10
+
 func validateContentLimits(content assemble.Content, limits xds.Limits) error {
+	if len(content.Rules) > limits.MaxMessageBytes {
+		return fmt.Errorf("rule text size %d exceeds the message limit of %d", len(content.Rules), limits.MaxMessageBytes)
+	}
 	if len(content.DataFiles) > limits.MaxDataFiles {
 		return fmt.Errorf("RuleData file count %d exceeds the limit of %d", len(content.DataFiles), limits.MaxDataFiles)
 	}
@@ -347,14 +355,14 @@ func validateContentLimits(content assemble.Content, limits xds.Limits) error {
 	return nil
 }
 
-func validateRenderedPayload(payload []byte, limits xds.Limits) error {
-	if len(payload) > limits.MaxMessageBytes {
-		return fmt.Errorf("runtime payload size %d exceeds the message limit of %d", len(payload), limits.MaxMessageBytes)
+func validateRenderedPayload(artifact render.Artifact, limits xds.Limits) error {
+	if size := proto.Size(artifact.Resource) + messageEnvelopeBytes; size > limits.MaxMessageBytes {
+		return fmt.Errorf("ECDS response size %d exceeds the message limit of %d", size, limits.MaxMessageBytes)
 	}
 	var header struct {
 		SchemaVersion int `json:"schema_version"`
 	}
-	if err := json.Unmarshal(payload, &header); err != nil {
+	if err := json.Unmarshal(artifact.Payload, &header); err != nil {
 		return fmt.Errorf("decode runtime payload: %w", err)
 	}
 	if header.SchemaVersion != render.SchemaVersion {

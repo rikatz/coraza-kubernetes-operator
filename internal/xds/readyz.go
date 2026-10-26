@@ -26,11 +26,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 )
 
 // VerifyBundledManifest checks that the bundled module bytes match the
@@ -50,6 +52,9 @@ func VerifyBundledManifest(manifest *assets.Manifest, data []byte) error {
 // accepted Engine configuration present at startup. Failures after the initial
 // sync do not flip the replica unready.
 type PublicationReadiness struct {
+	// Logger reports accepted records this build cannot publish by design.
+	Logger logr.Logger
+
 	mu          sync.Mutex
 	initialized bool
 	pending     map[string]string
@@ -61,14 +66,16 @@ type PublicationReadiness struct {
 // NewPublicationReadiness returns an uninitialized tracker.
 func NewPublicationReadiness() *PublicationReadiness {
 	return &PublicationReadiness{
+		Logger:   logr.Discard(),
 		pending:  make(map[string]string),
 		outcomes: make(map[string]string),
 	}
 }
 
 // Initialize records the Engines present at startup that carry an accepted
-// configuration. Reconcilers may run before this list is available, so their
-// outcomes are applied here rather than discarded. Later calls are ignored.
+// configuration this build can publish. Reconcilers may run before this list is
+// available, so their outcomes are applied here rather than discarded. Later
+// calls are ignored.
 func (p *PublicationReadiness) Initialize(engines []*wafv1alpha1.Engine) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -76,8 +83,16 @@ func (p *PublicationReadiness) Initialize(engines []*wafv1alpha1.Engine) {
 		return
 	}
 	p.initialized = true
+	stale := 0
 	for _, engine := range engines {
 		if engine == nil || engine.Status == nil || engine.Status.AcceptedConfiguration == nil {
+			continue
+		}
+		// A rendering schema bump leaves accepted records behind that this build
+		// cannot reproduce by design. They must not gate readiness: an Engine
+		// that never re-accepts would keep every replica unready.
+		if engine.Status.AcceptedConfiguration.RenderingSchemaVersion != render.RenderingSchemaVersion {
+			stale++
 			continue
 		}
 		key := engineKey(engine.Namespace, engine.Name)
@@ -90,6 +105,9 @@ func (p *PublicationReadiness) Initialize(engines []*wafv1alpha1.Engine) {
 		p.pending[key] = "not reconstructed yet"
 	}
 	p.outcomes = nil
+	if stale > 0 {
+		p.Logger.Info("ignoring accepted configurations from a previous rendering schema", "count", stale)
+	}
 }
 
 // Initialized reports whether the startup Engine list was processed.

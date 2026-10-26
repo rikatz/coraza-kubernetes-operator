@@ -35,9 +35,10 @@ const (
 	DefaultMaxMessageBytes = 16 << 20
 	// DefaultMaxDecodedDataBytes bounds the decoded RuleData carried by one
 	// Engine (8 MiB). RuleData is base64-encoded in the payload (4/3
-	// expansion), so 8 MiB becomes ~10.7 MiB, leaving ~5.3 MiB of the 16 MiB
-	// message for rule text and JSON keys (4096 maximum-length names add
-	// ~1 MiB).
+	// expansion), so 8 MiB becomes ~10.7 MiB, and 4096 maximum-length
+	// (253 byte) names add ~1 MiB of JSON keys and escaping: ~4.3 MiB of the
+	// 16 MiB message remains for rule text and the ECDS envelope. The plugin
+	// itself accepts up to 12 MiB of decoded RuleData and 16 MiB of payload.
 	DefaultMaxDecodedDataBytes = 8 << 20
 	// DefaultMaxDataFiles bounds the number of RuleData files per Engine.
 	DefaultMaxDataFiles = 4096
@@ -103,10 +104,11 @@ func DefaultLimits() Limits {
 	}
 }
 
-// withDefaults fills zero fields from DefaultLimits. It keeps programmatic
-// construction in tests honest without requiring every caller to spell out the
-// full envelope.
-func (l Limits) withDefaults() Limits {
+// WithDefaults fills zero fields from DefaultLimits, so a partially set Limits
+// still yields the full serving-plane envelope. Zero (or negative) means "use
+// the default". Callers that accept Limits from flags or tests must apply it
+// before using any field.
+func (l Limits) WithDefaults() Limits {
 	defaults := DefaultLimits()
 	if l.MaxMessageBytes <= 0 {
 		l.MaxMessageBytes = defaults.MaxMessageBytes
@@ -150,9 +152,9 @@ func (l Limits) withDefaults() Limits {
 // AddFlags registers the serving-plane flags on fs.
 func (l *Limits) AddFlags(fs *flag.FlagSet) {
 	fs.IntVar(&l.MaxMessageBytes, "xds-max-message-bytes", DefaultMaxMessageBytes,
-		"Maximum gRPC message size in bytes for the ECDS server")
+		"Maximum gRPC message size in bytes for the ECDS server (the plugin accepts at most 16 MiB of payload)")
 	fs.IntVar(&l.MaxDecodedDataBytes, "xds-max-decoded-data-bytes", DefaultMaxDecodedDataBytes,
-		"Maximum decoded RuleData bytes carried by one Engine")
+		"Maximum decoded RuleData bytes carried by one Engine (the plugin accepts at most 12 MiB)")
 	fs.IntVar(&l.MaxDataFiles, "xds-max-data-files", DefaultMaxDataFiles,
 		"Maximum number of RuleData files carried by one Engine")
 	fs.IntVar(&l.MaxStreams, "xds-max-streams", DefaultMaxStreams,

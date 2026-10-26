@@ -39,6 +39,12 @@ Before upgrading, review the release notes for any breaking changes or migration
 
 - [GitHub Releases](https://github.com/networking-incubator/coraza-kubernetes-operator/releases)
 
+## Rendering Schema Upgrades
+
+The operator renders each Engine's ECDS configuration into a versioned payload. When a release bumps the rendering schema, accepted configurations recorded by an older version are not published by the new build.
+
+Affected Engines re-accept their configuration on the next reconcile and the new payload replaces the old one. While they wait, their older accepted records are ignored for operator readiness, so an upgrade does not block the operator from becoming Ready. An Engine that cannot re-accept (for example because its RuleSet is missing or no verified CA is configured) stays `Degraded` with `Ready=False`, and its Gateway fails closed until the problem is fixed.
+
 ## Rolling Back
 
 To roll back a Helm upgrade to the previous version:

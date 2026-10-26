@@ -91,7 +91,7 @@ func NewStreamRegistry(auth *Authenticator, authz *AuthzIndex, limits Limits, me
 	return &StreamRegistry{
 		auth:        auth,
 		authz:       authz,
-		limits:      limits.withDefaults(),
+		limits:      limits.WithDefaults(),
 		metrics:     metrics,
 		now:         time.Now,
 		streams:     make(map[uint64]*StreamSession),

@@ -25,6 +25,7 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 )
 
 func TestPublicationReadinessColdReplicaStaysUnready(t *testing.T) {
@@ -36,7 +37,10 @@ func TestPublicationReadinessColdReplicaStaysUnready(t *testing.T) {
 	accepted := &wafv1alpha1.Engine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "checkout"},
 		Status: &wafv1alpha1.EngineStatus{
-			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{Version: "sha256:v1"},
+			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{
+				RenderingSchemaVersion: render.RenderingSchemaVersion,
+				Version:                "sha256:v1",
+			},
 		},
 	}
 	withoutAccepted := &wafv1alpha1.Engine{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "other"}}
@@ -65,13 +69,19 @@ func TestPublicationReadinessKeepsReconcilesThatRunBeforeInitialize(t *testing.T
 	accepted := &wafv1alpha1.Engine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "checkout"},
 		Status: &wafv1alpha1.EngineStatus{
-			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{Version: "sha256:v1"},
+			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{
+				RenderingSchemaVersion: render.RenderingSchemaVersion,
+				Version:                "sha256:v1",
+			},
 		},
 	}
 	failing := &wafv1alpha1.Engine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "broken"},
 		Status: &wafv1alpha1.EngineStatus{
-			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{Version: "sha256:v1"},
+			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{
+				RenderingSchemaVersion: render.RenderingSchemaVersion,
+				Version:                "sha256:v1",
+			},
 		},
 	}
 
@@ -86,6 +96,43 @@ func TestPublicationReadinessKeepsReconcilesThatRunBeforeInitialize(t *testing.T
 	}
 	if strings.Contains(err.Error(), "shop/checkout") {
 		t.Fatalf("Check() = %v, a pre-initialize success must not be pending", err)
+	}
+}
+
+// TestPublicationReadinessIgnoresOtherRenderingSchemas checks that an accepted
+// record this build cannot publish by design does not gate readiness, while a
+// failure at the current schema still does.
+func TestPublicationReadinessIgnoresOtherRenderingSchemas(t *testing.T) {
+	oldSchema := &wafv1alpha1.Engine{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "upgraded"},
+		Status: &wafv1alpha1.EngineStatus{
+			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{
+				RenderingSchemaVersion: render.RenderingSchemaVersion - 1,
+				Version:                "sha256:v1",
+			},
+		},
+	}
+	current := &wafv1alpha1.Engine{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "current"},
+		Status: &wafv1alpha1.EngineStatus{
+			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{
+				RenderingSchemaVersion: render.RenderingSchemaVersion,
+				Version:                "sha256:v1",
+			},
+		},
+	}
+
+	readiness := NewPublicationReadiness()
+	readiness.Initialize([]*wafv1alpha1.Engine{oldSchema})
+	if err := readiness.Check(); err != nil {
+		t.Fatalf("Check() = %v, an older rendering schema must not gate readiness", err)
+	}
+
+	readiness = NewPublicationReadiness()
+	readiness.Initialize([]*wafv1alpha1.Engine{current})
+	err := readiness.Check()
+	if err == nil || !strings.Contains(err.Error(), "shop/current") {
+		t.Fatalf("Check() = %v, a same-schema accepted record must still gate readiness", err)
 	}
 }
 

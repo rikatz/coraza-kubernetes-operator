@@ -96,7 +96,7 @@ func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, str
 		Auth:       auth,
 		Authz:      authz,
 		Streams:    streams,
-		Limits:     limits.withDefaults(),
+		Limits:     limits.WithDefaults(),
 		Metrics:    metrics,
 		Store:      store,
 		Logger:     logr.Discard(),

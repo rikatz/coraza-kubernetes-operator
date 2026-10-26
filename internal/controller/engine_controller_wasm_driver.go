@@ -35,7 +35,6 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
 // -----------------------------------------------------------------------------
@@ -147,12 +146,9 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	// Accept only content the ECDS serving plane can deliver. Checking here
 	// keeps readiness honest: the publication reconciler refuses oversized
 	// payloads silently.
-	limits := r.Limits
-	if limits.MaxMessageBytes <= 0 {
-		limits = xds.DefaultLimits()
-	}
+	limits := r.Limits.WithDefaults()
 	if err := validateContentLimits(content, limits); err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("RuleSet %s content exceeds delivery limits: %v", ruleSet.Name, err)); patchErr != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("RuleSet %s content exceeds delivery limits: %v", ruleSet.Name, err), func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
@@ -178,8 +174,8 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		}
 		return ctrl.Result{}, err
 	}
-	if err := validateRenderedPayload(artifact.Payload, limits); err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Rendered Engine configuration exceeds delivery limits: %v", err)); patchErr != nil {
+	if err := validateRenderedPayload(artifact, limits); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Rendered Engine configuration exceeds delivery limits: %v", err), func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
@@ -355,6 +351,15 @@ func (r *EngineReconciler) applyEnvoyFilter(
 
 	logInfo(log, req, "Engine", "EnvoyFilter provisioned", "envoyFilter", envoyFilter.GetName(), "bootstrapPolicy", applied)
 	return applied, nil
+}
+
+// clearAcceptedConfiguration drops the accepted record of a delivery-limit
+// failure. The publisher then deletes the Engine's snapshot and readiness stops
+// depending on a record this build refuses to publish.
+func clearAcceptedConfiguration(engine *wafv1alpha1.Engine) {
+	if engine.Status != nil {
+		engine.Status.AcceptedConfiguration = nil
+	}
 }
 
 // patchAcceptedConfiguration records the accepted configuration and Ready
