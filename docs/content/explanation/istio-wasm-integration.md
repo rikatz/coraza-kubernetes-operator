@@ -20,9 +20,8 @@ For each accepted Engine the operator:
      for the Engine's resource name.
 2. Serves the filter configuration over **ECDS** on its own listener (port 18080, HTTP/2),
    authenticated with the Gateway's ServiceAccount token and a CA-pinned TLS channel.
-3. Serves the module bytes over HTTPS at `/wasm/<sha256>.wasm` (or the URL from
-   `spec.driver.wasm.url`); Envoy fetches them once, verifies the digest, and caches the
-   module, so rule updates never carry the binary again.
+3. Delivers the module bytes inside the ECDS resource (or, for `spec.driver.wasm.url`, lets
+   Envoy fetch them with a `sha256` check before running the filter).
 
 Until the ECDS resource arrives, Envoy applies a **deny-all RBAC** default config, so a
 Gateway whose Engine is not accepted never forwards traffic unfiltered.
@@ -34,7 +33,7 @@ The WASM module is the upstream
 Coraza WAF engine inside Envoy and blocks or allows requests based on the rules it is given.
 
 The operator's ECDS resource is the plugin's own configuration: the assembled SecLang text,
-the failure policy, and the metric labels. The module itself is referenced by URL and digest. See the [ECDS plugin
+the failure policy, and the metric labels, alongside the module bytes. See the [ECDS plugin
 contract]({{< relref "/reference/ecds-plugin-contract" >}}) for the exact payload.
 
 ## Rule updates
@@ -56,10 +55,8 @@ ECDS configuration accepted by proxy  resource=coraza.waf.<ns>.<engine>.<uid>  v
 
 Envoy itself only logs failures by default. Set `wasm=debug` on the proxy admin port
 (`curl -X POST localhost:15000/logging?wasm=debug`) to see the plugin instance being
-recreated. The module is not downloaded again: Envoy keeps it in its digest-keyed code cache, so a rule
-change is a kilobyte-sized message. The compiled module is not re-instantiated either — the
-VM is keyed by `vm_id` plus the module bytes — and only the WAF is rebuilt from the new
-configuration.
+recreated. The compiled module is not re-instantiated: the VM is keyed by `vm_id` plus the module
+bytes, and a rule change only rebuilds the WAF from the new configuration.
 
 ## Target selection
 
