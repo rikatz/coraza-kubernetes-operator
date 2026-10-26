@@ -22,7 +22,9 @@ import (
 	"strings"
 )
 
-var pmFromFilePattern = regexp.MustCompile(`(?i)@pmFromFile\s+("([^"]+)"|(\S+))`)
+// pmFromFilePattern matches @pmFromFile and its @pmf alias, quoted or not. The
+// alias must be covered too, or @pmf can read any operator-local file.
+var pmFromFilePattern = regexp.MustCompile(`(?i)(@(?:pmFromFile|pmf))\s+("([^"]+)"|(\S+))`)
 
 // stripSecLangCommentLines removes SecLang comment lines (first non-whitespace
 // character is '#') so @pmFromFile prose in CRS documentation is not scanned.
@@ -46,18 +48,19 @@ func stripSecLangCommentLines(rules string) string {
 func ValidatePMFromFileData(aggregatedRules string, dataFiles map[string][]byte) error {
 	activeRules := stripSecLangCommentLines(aggregatedRules)
 	for _, match := range pmFromFilePattern.FindAllStringSubmatch(activeRules, -1) {
-		if len(match) < 2 {
+		if len(match) < 3 {
 			continue
 		}
-		basename := strings.Trim(match[1], `"'`)
+		operator := match[1]
+		basename := strings.Trim(match[2], `"'`)
 		if basename == "" {
 			continue
 		}
 		if dataFiles == nil {
-			return fmt.Errorf("@pmFromFile %s requires spec.data RuleData but none are referenced", basename)
+			return fmt.Errorf("%s %s requires spec.data RuleData but none are referenced", operator, basename)
 		}
 		if _, ok := dataFiles[basename]; !ok {
-			return fmt.Errorf("@pmFromFile %s: file not provided by referenced RuleData", basename)
+			return fmt.Errorf("%s %s: file not provided by referenced RuleData", operator, basename)
 		}
 	}
 	return nil

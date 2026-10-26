@@ -18,6 +18,7 @@ package assemble_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -290,4 +291,22 @@ func TestAssembleRejectsReservedDataFileNames(t *testing.T) {
 	assert.Contains(t, err.Error(), `"."`)
 	assert.Contains(t, err.Error(), `".."`)
 	assert.Contains(t, err.Error(), "RuleData data")
+}
+
+func TestAssembleRejectsEmptyAndOversizedDataFileNames(t *testing.T) {
+	_, err := assemble.Assemble(assemble.Inputs{
+		Sources: []assemble.SourceInput{{Name: "rules", Rules: "SecRuleEngine On"}},
+		Data: []assemble.DataInput{{
+			Name: "data",
+			Files: map[string]string{
+				"":                       "x",
+				strings.Repeat("a", 254): "y",
+				"ok.data":                "z",
+			},
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "spec.data contains invalid data file name(s)")
+	assert.Contains(t, err.Error(), `"" (RuleData data)`)
+	assert.Contains(t, err.Error(), `"`+strings.Repeat("a", 254)+`" (RuleData data)`)
 }

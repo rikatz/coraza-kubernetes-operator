@@ -55,6 +55,24 @@ func TestValidatePMFromFileData(t *testing.T) {
 		assert.Contains(t, err.Error(), "want.data")
 	})
 
+	t.Run("pmf alias without data", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			`SecRule ARGS "@pmf /etc/passwd" "id:1,phase:1,pass"`,
+			nil,
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "/etc/passwd")
+		assert.Contains(t, err.Error(), "spec.data")
+	})
+
+	t.Run("pmf alias with matching data", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			`SecRule ARGS "@pmf overlap.data" "id:1,phase:1,pass"`,
+			map[string][]byte{"overlap.data": []byte("a")},
+		)
+		assert.NoError(t, err)
+	})
+
 	populatedData := map[string][]byte{"overlap.data": []byte("x")}
 
 	t.Run("CRS comment prose ignored", func(t *testing.T) {

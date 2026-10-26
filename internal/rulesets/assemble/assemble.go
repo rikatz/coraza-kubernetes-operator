@@ -42,6 +42,9 @@ var ErrEmptyRules = errors.New("assembled rules are empty")
 // EmptyRulesPolicy controls how Assemble treats empty rule text.
 type EmptyRulesPolicy string
 
+// maxDataFileNameBytes mirrors the plugin's data file name cap.
+const maxDataFileNameBytes = 253
+
 const (
 	// EmptyRulesPolicyReject rejects empty assembled rules. It is the default.
 	EmptyRulesPolicyReject EmptyRulesPolicy = "Reject"
@@ -148,13 +151,14 @@ func validateReferences(in Inputs) error {
 		msgs = append(msgs, fmt.Sprintf("spec.data contains duplicate RuleData name(s): %s", strings.Join(dups, ", ")))
 	}
 
-	// The plugin resolves every data file name with fs.ValidPath and rejects
-	// ".", failing the whole configuration. CEL only guards writes, so objects
-	// created before that rule existed must be caught here.
+	// The plugin resolves every data file name with fs.ValidPath, rejects ".",
+	// and rejects names longer than 253 bytes, failing the whole configuration.
+	// CEL only guards writes, so objects created before those rules existed
+	// must be caught here.
 	var invalid []string
 	for _, data := range in.Data {
 		for name := range data.Files {
-			if name == "." || !fs.ValidPath(name) {
+			if name == "." || len(name) > maxDataFileNameBytes || !fs.ValidPath(name) {
 				invalid = append(invalid, fmt.Sprintf("%q (RuleData %s)", name, data.Name))
 			}
 		}
