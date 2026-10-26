@@ -39,7 +39,6 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 )
 
@@ -80,15 +79,10 @@ type RuleSetAccepted struct {
 	ContentHash string // "sha256:<64hex>"
 }
 
-// BinaryRef is the raw WASM binary location and digest, or its bytes when the
-// operator serves the bundled module.
+// BinaryRef is the raw WASM binary location and digest.
 type BinaryRef struct {
 	URL    string
 	SHA256 string // 64 lowercase hex
-	// Inline carries the bundled module so Envoy does not have to fetch it. A
-	// remote fetch of a module that is not yet cached makes Envoy reject the
-	// first ECDS push and end the subscription.
-	Inline []byte
 }
 
 // VMSettings controls the WASM VM configuration. Zero values select the
@@ -224,9 +218,6 @@ func Render(in EngineInput) (Artifact, error) {
 
 	runtime, vmID, codeTimeout := resolveVMSettings(in.VMSettings, in.UID)
 	resourceName := resourceName(in.Namespace, in.Name, in.UID)
-	if len(in.Binary.Inline) == 0 {
-		in.Binary.Inline = bundledModule(in.Binary)
-	}
 
 	// The bundled plugin is upstream coraza-proxy-wasm, which resolves data
 	// files only from its compiled-in CoreRuleSet. Refuse rather than publish a
@@ -387,9 +378,10 @@ func buildResource(name string, binary BinaryRef, runtime, vmID string, codeTime
 			VmConfig: &wasmv3.VmConfig{
 				VmId:    vmID,
 				Runtime: runtime,
-				// A remote module that is not cached yet must NACK the push
-				// instead of leaving a filter that cannot load.
-				NackOnCodeCacheMiss: len(binary.Inline) == 0,
+				// A proxy without the module in its cache must reject the push
+				// instead of installing a filter that cannot load; the operator
+				// then resubscribes it once the fetch completes.
+				NackOnCodeCacheMiss: true,
 				Code:                wasmCode(binary, codeTimeout),
 			},
 		},
@@ -406,29 +398,10 @@ func buildResource(name string, binary BinaryRef, runtime, vmID string, codeTime
 	}, nil
 }
 
-// bundledModule returns the embedded module when the reference points at it, so
-// the resource carries the bytes instead of making Envoy fetch them.
-func bundledModule(binary BinaryRef) []byte {
-	manifest, data, err := assets.ResolveDefault()
-	if err != nil || manifest.SHA256 != binary.SHA256 {
-		return nil
-	}
-	return data
-}
-
-// wasmCode returns inline bytes for the bundled module, or the remote source
-// for a module the user hosts. NackOnCodeCacheMiss is only meaningful for the
-// remote case: Envoy fetches the module when it first applies the config.
+// wasmCode returns the sha256-pinned remote source. A proxy fetches the module
+// once and caches it by digest; the operator resubscribes it when it rejects a
+// push because the bytes are not cached yet.
 func wasmCode(binary BinaryRef, codeTimeout time.Duration) *corev3.AsyncDataSource {
-	if len(binary.Inline) > 0 {
-		return &corev3.AsyncDataSource{
-			Specifier: &corev3.AsyncDataSource_Local{
-				Local: &corev3.DataSource{
-					Specifier: &corev3.DataSource_InlineBytes{InlineBytes: binary.Inline},
-				},
-			},
-		}
-	}
 	return &corev3.AsyncDataSource{
 		Specifier: &corev3.AsyncDataSource_Remote{
 			Remote: &corev3.RemoteDataSource{
