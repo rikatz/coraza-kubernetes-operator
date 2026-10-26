@@ -20,9 +20,13 @@ import (
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	wasmhttp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/wasm/v3"
+	wasmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/wasm/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestSnapshotStoreLifecycle(t *testing.T) {
@@ -46,12 +50,25 @@ func TestSnapshotStoreLifecycle(t *testing.T) {
 
 func TestSnapshotStoreBumpKeepsAcceptedVersion(t *testing.T) {
 	store := NewSnapshotStore()
+	wasm := &wasmhttp.Wasm{Config: &wasmv3.PluginConfig{
+		Name: "coraza.waf.ns.engine.uid",
+		Vm: &wasmv3.PluginConfig_VmConfig{VmConfig: &wasmv3.VmConfig{
+			VmId:                "coraza-uid",
+			NackOnCodeCacheMiss: true,
+			Code: &corev3.AsyncDataSource{Specifier: &corev3.AsyncDataSource_Remote{
+				Remote: &corev3.RemoteDataSource{HttpUri: &corev3.HttpUri{Uri: "https://operator/wasm/plugin.wasm"}, Sha256: "digest"},
+			}},
+		}},
+	}}
+	typed, err := anypb.New(wasm)
+	require.NoError(t, err)
+	original := &corev3.TypedExtensionConfig{Name: "coraza.waf.ns.engine.uid", TypedConfig: typed}
 	require.NoError(t, store.Replace(&Snapshot{
 		ResourceName: "coraza.waf.ns.engine.uid",
 		Namespace:    "ns",
 		EngineName:   "engine",
 		Version:      "sha256:v1",
-		Resource:     &corev3.TypedExtensionConfig{Name: "coraza.waf.ns.engine.uid"},
+		Resource:     original,
 	}))
 
 	require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", 1))
@@ -59,6 +76,17 @@ func TestSnapshotStoreBumpKeepsAcceptedVersion(t *testing.T) {
 	cached, err := store.cache.GetSnapshot("ns/engine")
 	require.NoError(t, err)
 	assert.Equal(t, "sha256:v1.retry1", cached.GetVersion(resource.ExtensionConfigType))
+	retried := cached.GetResources(resource.ExtensionConfigType)[original.Name].(*corev3.TypedExtensionConfig)
+	assert.False(t, proto.Equal(original.TypedConfig, retried.TypedConfig), "Envoy skips identical typed configs even after a NACK")
+	var retryWasm wasmhttp.Wasm
+	require.NoError(t, retried.TypedConfig.UnmarshalTo(&retryWasm))
+	assert.Equal(t, "coraza-uid.retry1", retryWasm.Config.GetVmConfig().VmId)
+	retryWasm.Config.GetVmConfig().VmId = "coraza-uid"
+	assert.True(t, proto.Equal(wasm, &retryWasm), "retry must preserve the remote source and plugin settings")
+	var acceptedWasm wasmhttp.Wasm
+	require.NoError(t, original.TypedConfig.UnmarshalTo(&acceptedWasm))
+	assert.True(t, proto.Equal(wasm, &acceptedWasm), "retry must not mutate the accepted resource")
+	assert.True(t, proto.Equal(original, store.meta["ns/engine"].Resource), "the accepted resource must remain unchanged")
 
 	snapshot, ok := store.Get("ns/engine")
 	require.True(t, ok)

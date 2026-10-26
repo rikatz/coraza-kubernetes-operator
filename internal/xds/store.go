@@ -22,9 +22,13 @@ import (
 	"fmt"
 	"sync"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	wasmhttp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/wasm/v3"
 	cachetypes "github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 // SnapshotStore publishes one ECDS snapshot per Engine into go-control-plane's
@@ -69,9 +73,8 @@ func (s *SnapshotStore) Replace(snapshot *Snapshot) error {
 }
 
 // BumpRejected republishes the snapshot for one ECDS resource under a derived
-// version so a proxy that rejected it applies it again. Envoy does not retry a
-// configuration it already rejected, even after resubscribing; the accepted
-// version recorded for the Engine is left untouched.
+// version and VM ID so Envoy re-applies a rejected typed configuration. The
+// accepted resource and version recorded for the Engine are left untouched.
 func (s *SnapshotStore) BumpRejected(resourceName string, attempt int) error {
 	s.mu.RLock()
 	var key string
@@ -87,8 +90,24 @@ func (s *SnapshotStore) BumpRejected(resourceName string, attempt int) error {
 		return fmt.Errorf("no snapshot for resource %q", resourceName)
 	}
 
+	retried := proto.Clone(meta.Resource).(*corev3.TypedExtensionConfig)
+	var wasm wasmhttp.Wasm
+	if err := retried.TypedConfig.UnmarshalTo(&wasm); err != nil {
+		return fmt.Errorf("decode rejected WASM configuration: %w", err)
+	}
+	vm := wasm.GetConfig().GetVmConfig()
+	if vm == nil {
+		return errors.New("rejected WASM configuration has no VM")
+	}
+	// Envoy remembers the typed-config hash even after a NACK; a version-only retry is skipped.
+	vm.VmId = fmt.Sprintf("%s.retry%d", vm.VmId, attempt)
+	typed, err := anypb.New(&wasm)
+	if err != nil {
+		return fmt.Errorf("encode retry WASM configuration: %w", err)
+	}
+	retried.TypedConfig = typed
 	compiled, err := cachev3.NewSnapshot(fmt.Sprintf("%s.retry%d", meta.Version, attempt), map[resource.Type][]cachetypes.Resource{
-		resource.ExtensionConfigType: {meta.Resource},
+		resource.ExtensionConfigType: {retried},
 	})
 	if err != nil {
 		return fmt.Errorf("build retry snapshot: %w", err)

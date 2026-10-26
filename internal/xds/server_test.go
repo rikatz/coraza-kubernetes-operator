@@ -25,6 +25,9 @@ import (
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	wasmhttp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/wasm/v3"
+	wasmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/wasm/v3"
+	"google.golang.org/protobuf/types/known/anypb"
 	authv1 "k8s.io/api/authentication/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -170,7 +173,14 @@ func (f *streamFixture) open(t *testing.T, token string, names ...string) extens
 	return stream
 }
 
-func (f *streamFixture) snapshot(version string) *Snapshot {
+func (f *streamFixture) snapshot(t *testing.T, version string) *Snapshot {
+	t.Helper()
+	typed, err := anypb.New(&wasmhttp.Wasm{Config: &wasmv3.PluginConfig{
+		Vm: &wasmv3.PluginConfig_VmConfig{VmConfig: &wasmv3.VmConfig{
+			VmId: "coraza-engine-uid", NackOnCodeCacheMiss: true,
+		}},
+	}})
+	require.NoError(t, err)
 	return &Snapshot{
 		ResourceName: f.resourceName,
 		Namespace:    testNamespace,
@@ -178,7 +188,7 @@ func (f *streamFixture) snapshot(version string) *Snapshot {
 		EngineUID:    types.UID("engine-uid"),
 		RuleSetHash:  "sha256:" + version,
 		Version:      "sha256:" + version,
-		Resource:     &corev3.TypedExtensionConfig{Name: f.resourceName},
+		Resource:     &corev3.TypedExtensionConfig{Name: f.resourceName, TypedConfig: typed},
 	}
 }
 
@@ -202,7 +212,7 @@ func recvCode(t *testing.T, stream extensionv3.ExtensionConfigDiscoveryService_S
 
 func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 	fixture := newStreamFixture(t)
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
 	// The initial request carries a spoofed node.id; the server must pin the
 	// watch to the authorized Engine, not the client-supplied identity.
@@ -238,7 +248,7 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fixture.store.Replace(fixture.snapshot("v2"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
 	second := recv(t, stream)
 	if second.GetVersionInfo() != "sha256:v2" || second.GetNonce() != "2" {
 		t.Fatalf("second response = version %q nonce %q", second.GetVersionInfo(), second.GetNonce())
@@ -248,7 +258,7 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
 	fixture := newStreamFixture(t)
 	fixture.server.RetryDelay = 0
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
 	nack := func(stream extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient, resp *discoveryv3.DiscoveryResponse) {
 		t.Helper()
@@ -313,7 +323,7 @@ func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
 func TestStreamNackBeforeSubscriptionStillResubscribes(t *testing.T) {
 	fixture := newStreamFixture(t)
 	fixture.server.RetryDelay = 0
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
 	// Envoy may replay the NACK as the first message of a reconnected stream,
 	// before it sends a subscription we recorded.
@@ -392,7 +402,7 @@ func TestStreamRequiresAuthenticationAndAuthorization(t *testing.T) {
 
 func TestStreamIgnoresNodeIdentity(t *testing.T) {
 	fixture := newStreamFixture(t)
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
 	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+validToken)
 	stream, err := fixture.client.StreamExtensionConfigs(ctx)
@@ -418,7 +428,7 @@ func TestStreamDoesNotSendAnEmptyResponseOnMiss(t *testing.T) {
 	pending := startRecv(stream)
 	expectNoResult(t, pending, 200*time.Millisecond)
 
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 	response := expectResult(t, pending)
 	if response.GetVersionInfo() != "sha256:v1" {
 		t.Fatalf("version_info = %q, want sha256:v1", response.GetVersionInfo())
@@ -427,7 +437,7 @@ func TestStreamDoesNotSendAnEmptyResponseOnMiss(t *testing.T) {
 
 func TestStreamRevokedWhenAuthorizationIsRemoved(t *testing.T) {
 	fixture := newStreamFixture(t)
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	_ = recv(t, stream)
@@ -440,7 +450,7 @@ func TestStreamRevokedWhenAuthorizationIsRemoved(t *testing.T) {
 
 func TestStreamUnavailableWhenServerShutsDown(t *testing.T) {
 	fixture := newStreamFixture(t)
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	_ = recv(t, stream)
@@ -453,7 +463,7 @@ func TestStreamUnavailableWhenServerShutsDown(t *testing.T) {
 
 func TestStreamUnauthenticatedWhenRevalidationFails(t *testing.T) {
 	fixture := newStreamFixture(t)
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	_ = recv(t, stream)
@@ -470,7 +480,7 @@ func TestStreamRejectsIdleStreamBeyondLimit(t *testing.T) {
 	limits.MaxStreams = 1
 	limits.StreamMaxLifetime = time.Hour
 	fixture := newStreamFixtureWithLimits(t, limits)
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
 	// The first stream occupies the only slot.
 	stream := fixture.open(t, validToken, fixture.resourceName)
@@ -497,7 +507,7 @@ func TestStreamRejectsPerIdentityBeyondLimit(t *testing.T) {
 	limits.MaxStreamsPerIdentity = 1
 	limits.StreamMaxLifetime = time.Hour
 	fixture := newStreamFixtureWithLimits(t, limits)
-	fixture.store.Replace(fixture.snapshot("v1"))
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	_ = recv(t, stream)
