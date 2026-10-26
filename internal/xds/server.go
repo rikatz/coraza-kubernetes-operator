@@ -22,7 +22,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
@@ -72,10 +71,6 @@ type Server struct {
 	Metrics *Metrics
 	Logger  logr.Logger
 
-	// RetryDelay waits before closing a stream whose configuration Envoy
-	// rejected, so the remote module fetch it triggered can finish.
-	RetryDelay time.Duration
-
 	srv xdsserver.Server
 
 	streams     sync.Map // int64 -> *serverStream
@@ -86,13 +81,12 @@ type Server struct {
 // NewServer wires the go-control-plane server around the snapshot cache.
 func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, streams *StreamRegistry, limits Limits, metrics *Metrics) *Server {
 	s := &Server{
-		Auth:       auth,
-		Authz:      authz,
-		Streams:    streams,
-		Limits:     limits.withDefaults(),
-		Metrics:    metrics,
-		Logger:     logr.Discard(),
-		RetryDelay: 3 * time.Second,
+		Auth:    auth,
+		Authz:   authz,
+		Streams: streams,
+		Limits:  limits.withDefaults(),
+		Metrics: metrics,
+		Logger:  logr.Discard(),
 	}
 	s.srv = xdsserver.NewServer(context.Background(), store.cache, xdsserver.CallbackFuncs{
 		StreamOpenFunc:    s.onStreamOpen,
@@ -115,7 +109,7 @@ func lifecycleStatus(cause error) error {
 		return status.Error(codes.PermissionDenied, "resource is not authorized")
 	case ErrRevalidateFailed:
 		return status.Error(codes.Unauthenticated, "authentication failed")
-	case ErrLifetimeExpired, ErrServerShutdown, ErrResubscribe:
+	case ErrLifetimeExpired, ErrServerShutdown:
 		return status.Error(codes.Unavailable, "stream must be re-established")
 	}
 	return nil
@@ -237,7 +231,12 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 
 	if req.GetErrorDetail() != nil {
 		s.Metrics.Nack("rejected")
-		s.retryRejected(entry, req.GetVersionInfo())
+		if s.resubscribeRejected(entry, req.GetVersionInfo()) {
+			// A proxy that rejects a configuration because the remote module is
+			// not cached yet only re-applies it on a new subscription, so end
+			// the stream with a retryable status.
+			return status.Error(codes.Unavailable, "configuration rejected, resubscribe")
+		}
 		return nil
 	}
 
@@ -288,17 +287,20 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 
 	if req.GetResponseNonce() != "" {
 		s.Metrics.Ack()
+		s.nacks.Delete(entry.resourceName)
+		s.Logger.Info("ECDS configuration accepted by proxy", "resource", entry.resourceName, "version", req.GetVersionInfo())
 	}
 	return nil
 }
 
-// retryRejected makes a NACKed client resubscribe. A cold proxy rejects the
-// first ECDS push because the remote WASM module is not cached yet, and Envoy
-// never asks for that resource again on its own; closing the stream after the
-// background fetch has had time to finish gives it a fresh subscription.
-func (s *Server) retryRejected(entry *serverStream, rejectedVersion string) {
+// resubscribeRejected reports whether the rejected configuration should end the
+// stream so the proxy resubscribes. A cold proxy rejects the first push because
+// the remote module is not cached yet, and Envoy never asks for that resource
+// again on its own; the reconnect gives it the configuration once the fetch has
+// completed.
+func (s *Server) resubscribeRejected(entry *serverStream, rejectedVersion string) bool {
 	if entry.resourceName == "" {
-		return
+		return false
 	}
 	state := nackState{version: rejectedVersion}
 	if prev, ok := s.nacks.Load(entry.resourceName); ok {
@@ -310,11 +312,11 @@ func (s *Server) retryRejected(entry *serverStream, rejectedVersion string) {
 	s.nacks.Store(entry.resourceName, state)
 	if state.attempts > nackRetryLimit {
 		s.Logger.Info("ECDS retry budget exhausted", "resource", entry.resourceName, "version", rejectedVersion)
-		return
+		return false
 	}
-	s.Logger.Info("resubscribing NACKed configuration", "resource", entry.resourceName, "attempt", state.attempts)
-	sessionID := entry.session.ID
-	time.AfterFunc(s.RetryDelay, func() { s.Streams.ResetStream(sessionID) })
+	s.Logger.Info("resubscribing proxy after rejected configuration",
+		"resource", entry.resourceName, "version", rejectedVersion, "attempt", state.attempts)
+	return true
 }
 
 func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {

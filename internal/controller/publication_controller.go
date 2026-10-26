@@ -241,6 +241,12 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 	}); err != nil {
 		return err
 	}
+	logf.FromContext(ctx).Info("ECDS configuration published",
+		"version", artifact.Version,
+		"ruleSources", len(inputs.Sources),
+		"ruleBytes", len(content.Rules),
+		"dataFiles", len(content.DataFiles),
+	)
 	r.Metrics.SetSnapshotVersion(engine.Namespace, engine.Name)
 	r.remember(key, fingerprint, accepted.Version)
 	return nil

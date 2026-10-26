@@ -243,9 +243,8 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 	}
 }
 
-func TestStreamNackForcesResubscribe(t *testing.T) {
+func TestStreamNackResubscribesWithinBudget(t *testing.T) {
 	fixture := newStreamFixture(t)
-	fixture.server.RetryDelay = 0
 	fixture.store.Replace(fixture.snapshot("v1"))
 
 	nack := func(stream extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient, resp *discoveryv3.DiscoveryResponse) {
