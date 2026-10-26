@@ -26,6 +26,10 @@ import (
 
 // Stream close causes. The server maps them to bounded gRPC statuses.
 var (
+	// ErrResubscribe closes a stream so its client resubscribes, for example
+	// after a rejected configuration that needs the remote module first.
+	ErrResubscribe = errors.New("resubscribe required")
+
 	// ErrRevoked means the Engine or Gateway mapping no longer authorizes the
 	// stream.
 	ErrRevoked = errors.New("authorization revoked")
@@ -150,6 +154,16 @@ func (r *StreamRegistry) Unregister(id uint64) {
 		delete(r.perIdentity, session.Identity.Key())
 	}
 	r.metrics.StreamClosed()
+}
+
+// ResetStream closes one live stream with a retryable status so the client
+// resubscribes.
+func (r *StreamRegistry) ResetStream(id uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if session, ok := r.streams[id]; ok {
+		session.cancel(ErrResubscribe)
+	}
 }
 
 // SetResource changes the resource a live stream subscribes to after a

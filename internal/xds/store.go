@@ -68,6 +68,34 @@ func (s *SnapshotStore) Replace(snapshot *Snapshot) error {
 	return nil
 }
 
+// BumpRejected republishes the snapshot for one ECDS resource under a derived
+// version so a proxy that rejected it applies it again. Envoy does not retry a
+// configuration it already rejected, even after resubscribing; the accepted
+// version recorded for the Engine is left untouched.
+func (s *SnapshotStore) BumpRejected(resourceName string, attempt int) error {
+	s.mu.RLock()
+	var key string
+	var meta Snapshot
+	for candidate, snapshot := range s.meta {
+		if snapshot.ResourceName == resourceName {
+			key, meta = candidate, snapshot
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if key == "" {
+		return fmt.Errorf("no snapshot for resource %q", resourceName)
+	}
+
+	compiled, err := cachev3.NewSnapshot(fmt.Sprintf("%s.retry%d", meta.Version, attempt), map[resource.Type][]cachetypes.Resource{
+		resource.ExtensionConfigType: {meta.Resource},
+	})
+	if err != nil {
+		return fmt.Errorf("build retry snapshot: %w", err)
+	}
+	return s.cache.SetSnapshot(context.Background(), key, compiled)
+}
+
 // DeleteEngine removes an Engine's snapshot and any open watches.
 func (s *SnapshotStore) DeleteEngine(namespace, engineName string) {
 	key := engineSnapshotKey(namespace, engineName)

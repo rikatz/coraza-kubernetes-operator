@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,6 +42,28 @@ func TestSnapshotStoreLifecycle(t *testing.T) {
 	store.DeleteEngine("ns", "engine")
 	_, ok = store.Get("ns/engine")
 	assert.False(t, ok)
+}
+
+func TestSnapshotStoreBumpKeepsAcceptedVersion(t *testing.T) {
+	store := NewSnapshotStore()
+	require.NoError(t, store.Replace(&Snapshot{
+		ResourceName: "coraza.waf.ns.engine.uid",
+		Namespace:    "ns",
+		EngineName:   "engine",
+		Version:      "sha256:v1",
+		Resource:     &corev3.TypedExtensionConfig{Name: "coraza.waf.ns.engine.uid"},
+	}))
+
+	require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", 1))
+
+	cached, err := store.cache.GetSnapshot("ns/engine")
+	require.NoError(t, err)
+	assert.Equal(t, "sha256:v1.retry1", cached.GetVersion(resource.ExtensionConfigType))
+
+	snapshot, ok := store.Get("ns/engine")
+	require.True(t, ok)
+	assert.Equal(t, "sha256:v1", snapshot.Version, "the accepted version must not change")
+	assert.Error(t, store.BumpRejected("missing", 1))
 }
 
 func TestSnapshotStoreRejectsEmptySnapshot(t *testing.T) {

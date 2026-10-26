@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
@@ -37,6 +38,8 @@ import (
 const (
 	authorizationHeader        = "authorization"
 	invalidSubscriptionMessage = "invalid subscription"
+	// retryVersionSuffix marks a republished configuration.
+	retryVersionSuffix = ".retry"
 
 	// nackRetryLimit bounds how many times one rejected version is retried.
 	nackRetryLimit = 3
@@ -69,7 +72,12 @@ type Server struct {
 	Streams *StreamRegistry
 	Limits  Limits
 	Metrics *Metrics
+	Store   *SnapshotStore
 	Logger  logr.Logger
+
+	// RetryDelay gives a rejected configuration's remote module fetch time to
+	// finish before the proxy is asked to reapply it.
+	RetryDelay time.Duration
 
 	srv xdsserver.Server
 
@@ -81,12 +89,14 @@ type Server struct {
 // NewServer wires the go-control-plane server around the snapshot cache.
 func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, streams *StreamRegistry, limits Limits, metrics *Metrics) *Server {
 	s := &Server{
-		Auth:    auth,
-		Authz:   authz,
-		Streams: streams,
-		Limits:  limits.withDefaults(),
-		Metrics: metrics,
-		Logger:  logr.Discard(),
+		Auth:       auth,
+		Authz:      authz,
+		Streams:    streams,
+		Limits:     limits.withDefaults(),
+		Metrics:    metrics,
+		Store:      store,
+		Logger:     logr.Discard(),
+		RetryDelay: 2 * time.Second,
 	}
 	s.srv = xdsserver.NewServer(context.Background(), store.cache, xdsserver.CallbackFuncs{
 		StreamOpenFunc:    s.onStreamOpen,
@@ -109,7 +119,7 @@ func lifecycleStatus(cause error) error {
 		return status.Error(codes.PermissionDenied, "resource is not authorized")
 	case ErrRevalidateFailed:
 		return status.Error(codes.Unauthenticated, "authentication failed")
-	case ErrLifetimeExpired, ErrServerShutdown:
+	case ErrLifetimeExpired, ErrServerShutdown, ErrResubscribe:
 		return status.Error(codes.Unavailable, "stream must be re-established")
 	}
 	return nil
@@ -231,12 +241,11 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 
 	if req.GetErrorDetail() != nil {
 		s.Metrics.Nack("rejected")
-		if s.resubscribeRejected(entry, req.GetVersionInfo()) {
-			// A proxy that rejects a configuration because the remote module is
-			// not cached yet only re-applies it on a new subscription, so end
-			// the stream with a retryable status.
-			return status.Error(codes.Unavailable, "configuration rejected, resubscribe")
-		}
+		// A proxy that rejects a configuration because the remote module is not
+		// cached yet only re-applies it on a new subscription, so end the
+		// stream with a retryable status. Envoy can send the NACK as the first
+		// message of a reconnected stream, before any subscription was recorded.
+		s.resubscribeRejected(entry, rejectedResourceName(entry, req), req.GetVersionInfo())
 		return nil
 	}
 
@@ -298,25 +307,62 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 // the remote module is not cached yet, and Envoy never asks for that resource
 // again on its own; the reconnect gives it the configuration once the fetch has
 // completed.
-func (s *Server) resubscribeRejected(entry *serverStream, rejectedVersion string) bool {
-	if entry.resourceName == "" {
-		return false
+// rejectedResourceName returns the resource a NACK refers to. Envoy may send it
+// before the stream recorded its subscription.
+func rejectedResourceName(entry *serverStream, req *discoveryv3.DiscoveryRequest) string {
+	if entry.resourceName != "" {
+		return entry.resourceName
 	}
-	state := nackState{version: rejectedVersion}
-	if prev, ok := s.nacks.Load(entry.resourceName); ok {
-		if current, ok := prev.(nackState); ok && current.version == rejectedVersion {
+	if names := req.GetResourceNames(); len(names) == 1 {
+		if name := names[0]; strings.HasPrefix(name, resourceNamePrefix) && !strings.ContainsAny(name, "*?") {
+			return name
+		}
+	}
+	return ""
+}
+
+func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejectedVersion string) {
+	if resourceName == "" || s.Store == nil {
+		return
+	}
+	// Retries of the same content carry a derived version; count them against
+	// the version the Engine accepted.
+	base := rejectedVersion
+	if i := strings.Index(base, retryVersionSuffix); i > 0 {
+		base = base[:i]
+	}
+	state := nackState{version: base}
+	if prev, ok := s.nacks.Load(resourceName); ok {
+		if current, ok := prev.(nackState); ok && current.version == base {
 			state = current
 		}
 	}
 	state.attempts++
-	s.nacks.Store(entry.resourceName, state)
+	s.nacks.Store(resourceName, state)
 	if state.attempts > nackRetryLimit {
-		s.Logger.Info("ECDS retry budget exhausted", "resource", entry.resourceName, "version", rejectedVersion)
-		return false
+		s.Logger.Info("ECDS retry budget exhausted", "resource", resourceName, "version", rejectedVersion)
+		return
 	}
 	s.Logger.Info("resubscribing proxy after rejected configuration",
-		"resource", entry.resourceName, "version", rejectedVersion, "attempt", state.attempts)
-	return true
+		"resource", resourceName, "version", rejectedVersion, "attempt", state.attempts)
+
+	// Envoy never re-applies a version it rejected, and the remote module fetch
+	// it started needs to finish first: publish a derived version and close the
+	// stream so the proxy resubscribes and applies it from the code cache.
+	attempt := state.attempts
+	var sessionID uint64
+	if entry.session != nil {
+		sessionID = entry.session.ID
+	}
+	time.AfterFunc(s.RetryDelay, func() {
+		if err := s.Store.BumpRejected(resourceName, attempt); err != nil {
+			s.Logger.Error(err, "republish rejected configuration", "resource", resourceName)
+			return
+		}
+		if sessionID != 0 {
+			s.Streams.ResetStream(sessionID)
+		}
+	})
 }
 
 func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {

@@ -18,6 +18,7 @@ package xds
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -34,6 +35,7 @@ import (
 	extensionv3 "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -243,8 +245,9 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 	}
 }
 
-func TestStreamNackResubscribesWithinBudget(t *testing.T) {
+func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
 	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = 0
 	fixture.store.Replace(fixture.snapshot("v1"))
 
 	nack := func(stream extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient, resp *discoveryv3.DiscoveryResponse) {
@@ -258,27 +261,76 @@ func TestStreamNackResubscribesWithinBudget(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-
-	// A cold proxy rejects the first push because the remote module is not
-	// cached. The server closes the stream so Envoy resubscribes after the
-	// background fetch, instead of waiting for a version nobody sends.
-	for attempt := 1; attempt <= nackRetryLimit; attempt++ {
+	serveVersion := func() string {
 		stream := fixture.open(t, validToken, fixture.resourceName)
-		first := recv(t, stream)
-		if first.GetVersionInfo() != "sha256:v1" {
-			t.Fatalf("version_info = %q, want sha256:v1", first.GetVersionInfo())
+		return recv(t, stream).GetVersionInfo()
+	}
+	cachedVersion := func() string {
+		cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+		if err != nil {
+			return ""
 		}
-		nack(stream, first)
-		if code := recvCode(t, stream); code != codes.Unavailable {
-			t.Fatalf("attempt %d: stream code = %v, want Unavailable", attempt, code)
-		}
+		return cached.GetVersion(resource.ExtensionConfigType)
 	}
 
-	// The retry budget is bounded: a fourth rejection keeps the stream open.
+	// A cold proxy rejects the configuration because the remote module is not
+	// cached. Envoy never re-applies a version it rejected, so the operator
+	// publishes a derived version and closes the stream for a resubscribe.
 	stream := fixture.open(t, validToken, fixture.resourceName)
-	last := recv(t, stream)
-	nack(stream, last)
+	first := recv(t, stream)
+	if got := first.GetVersionInfo(); got != "sha256:v1" {
+		t.Fatalf("version_info = %q, want sha256:v1", got)
+	}
+	nack(stream, first)
+	_ = recvCode(t, stream)
+	require.Eventually(t, func() bool { return cachedVersion() == "sha256:v1.retry1" }, time.Second, 5*time.Millisecond)
+	if got := serveVersion(); got != "sha256:v1.retry1" {
+		t.Fatalf("resubscribed version = %q, want sha256:v1.retry1", got)
+	}
+
+	// The accepted version never changes, so the publication loop coalesces.
+	snapshot, ok := fixture.store.Get(testNamespace + "/" + streamEngine)
+	require.True(t, ok)
+	if snapshot.Version != "sha256:v1" {
+		t.Fatalf("accepted version = %q, want sha256:v1", snapshot.Version)
+	}
+
+	// The retry budget is bounded: further NACKs stop bumping.
+	for attempt := 2; attempt <= nackRetryLimit; attempt++ {
+		stream := fixture.open(t, validToken, fixture.resourceName)
+		response := recv(t, stream)
+		nack(stream, response)
+		_ = recvCode(t, stream)
+		require.Eventually(t, func() bool {
+			return cachedVersion() == fmt.Sprintf("sha256:v1.retry%d", attempt)
+		}, time.Second, 5*time.Millisecond)
+	}
+	stream = fixture.open(t, validToken, fixture.resourceName)
+	nack(stream, recv(t, stream))
 	expectNoResult(t, startRecv(stream), 150*time.Millisecond)
+}
+
+func TestStreamNackBeforeSubscriptionStillResubscribes(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = 0
+	fixture.store.Replace(fixture.snapshot("v1"))
+
+	// Envoy may replay the NACK as the first message of a reconnected stream,
+	// before it sends a subscription we recorded.
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+validToken)
+	stream, err := fixture.client.StreamExtensionConfigs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code := recvCode(t, stream); code != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", code)
+	}
 }
 
 func TestStreamRejectsWildcardAndMultipleResources(t *testing.T) {
