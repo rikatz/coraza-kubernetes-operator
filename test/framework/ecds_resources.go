@@ -56,11 +56,6 @@ const (
 )
 
 var (
-	// EnvoyFilterGVR is the GroupVersionResource for Istio EnvoyFilter resources.
-	EnvoyFilterGVR = schema.GroupVersionResource{
-		Group: "networking.istio.io", Version: "v1alpha3", Resource: "envoyfilters",
-	}
-
 	// NetworkPolicyGVR is the GroupVersionResource for Kubernetes NetworkPolicy resources.
 	NetworkPolicyGVR = schema.GroupVersionResource{
 		Group: "", Version: "v1", Resource: "networkpolicies",
