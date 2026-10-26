@@ -46,8 +46,8 @@ const (
 	// authenticate ECDS calls.
 	gatewayServiceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 	// googleGrpcChannelReceiveLimit is the gRPC receive limit for ECDS
-	// responses carrying the rule payload and the inlined module.
-	googleGrpcChannelReceiveLimit = 33554432
+	// responses carrying a full rule payload.
+	googleGrpcChannelReceiveLimit = 16777216
 
 	upstreamTLSContextTypeURL = "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext"
 	wasmFilterTypeURL         = "type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm"

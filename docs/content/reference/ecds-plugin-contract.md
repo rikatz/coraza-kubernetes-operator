@@ -68,14 +68,13 @@ version, proxy-wasm SDK version). CKO bundles exactly these bytes and manifest.
 
 ## Cold start
 
-The bundled module is delivered inline, so a proxy that has never seen the configuration
-still applies it on the first push.
-
-A module from `spec.driver.wasm.url` is fetched by Envoy instead. A proxy without it in its
-cache rejects that first push and never asks for the resource again on its own, so the
-operator closes the stream (at most three times per version) to make Envoy resubscribe once
-the fetch has finished. A proxy that keeps rejecting stays fail-closed and the operator logs
-`ECDS retry budget exhausted`.
+A proxy caches the module by `sha256` and fetches it only when it first applies a
+configuration. A proxy whose cache is empty rejects that first push and never asks for the
+resource again on its own, so the operator ends the stream with a retryable `Unavailable`
+(at most three times per version). Envoy resubscribes after the fetch has finished, applies
+the same configuration, and acknowledges it; the module is not sent again after that. A
+proxy that keeps rejecting stays fail-closed and the operator logs `ECDS retry budget
+exhausted`.
 
 ## ECDS resource shape
 
@@ -94,15 +93,15 @@ typed_config:
     vm_config:
       vm_id: coraza-11111111-1111-4111-8111-111111111111
       runtime: envoy.wasm.runtime.v8
-      # The bundled module travels inline: no fetch, no cold-start window.
       code:
-        local:
-          inline_bytes: <module bytes>
-      # A module from spec.driver.wasm.url is fetched instead:
-      # code:
-      #   remote:
-      #     http_uri: {uri: https://..., cluster: coraza_wasm, timeout: 10s}
-      #     sha256: <64hex>
+        remote:
+          # The bundled module is served by the operator; a custom
+          # spec.driver.wasm.url module replaces this URL.
+          http_uri:
+            uri: https://coraza-operator.coraza-system.svc.cluster.local:18080/wasm/<64hex>.wasm
+            cluster: coraza_wasm
+            timeout: 10s
+          sha256: <64hex>
     configuration:
       "@type": type.googleapis.com/google.protobuf.StringValue
       value: "<runtime configuration JSON>"
