@@ -39,20 +39,27 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 )
 
 const (
-	// SchemaVersion is the runtime configuration schema version.
-	SchemaVersion = 1
 	// RenderingSchemaVersion is the rendering schema version. It is part of
-	// every engine version hash.
-	RenderingSchemaVersion = 1
+	// every engine version hash. Version 2 renders the upstream
+	// coraza-proxy-wasm plugin configuration instead of the former
+	// operator-specific payload.
+	RenderingSchemaVersion = 2
 
 	defaultDriverType    = "wasm"
 	defaultFailurePolicy = "fail"
 	defaultRuntime       = "envoy.wasm.runtime.v8"
 	defaultCodeTimeout   = 10 * time.Second
+
+	// defaultDirectivesName is the key of the only directives entry rendered.
+	defaultDirectivesName = "default"
+	// noOpRules is an intentional no-op WAF for an empty RuleSet that opted in
+	// to EmptyRulesPolicy Allow.
+	noOpRules = "SecRuleEngine Off\n"
 	// wasmCluster is the Envoy cluster that serves the WASM binary. The
 	// cluster is installed by the EnvoyFilter in a later phase.
 	wasmCluster = "coraza_wasm"
@@ -73,10 +80,15 @@ type RuleSetAccepted struct {
 	ContentHash string // "sha256:<64hex>"
 }
 
-// BinaryRef is the raw WASM binary location and digest.
+// BinaryRef is the raw WASM binary location and digest, or its bytes when the
+// operator serves the bundled module.
 type BinaryRef struct {
 	URL    string
 	SHA256 string // 64 lowercase hex
+	// Inline carries the bundled module so Envoy does not have to fetch it. A
+	// remote fetch of a module that is not yet cached makes Envoy reject the
+	// first ECDS push and end the subscription.
+	Inline []byte
 }
 
 // VMSettings controls the WASM VM configuration. Zero values select the
@@ -212,25 +224,31 @@ func Render(in EngineInput) (Artifact, error) {
 
 	runtime, vmID, codeTimeout := resolveVMSettings(in.VMSettings, in.UID)
 	resourceName := resourceName(in.Namespace, in.Name, in.UID)
-
-	dataFiles := make(map[string][]byte, len(in.Content.DataFiles))
-	for name, data := range in.Content.DataFiles {
-		if data == nil {
-			data = []byte{}
-		}
-		dataFiles[name] = data
+	if len(in.Binary.Inline) == 0 {
+		in.Binary.Inline = bundledModule(in.Binary)
 	}
-	payload, err := CanonicalJSON(runtimeConfig{
-		SchemaVersion:         SchemaVersion,
-		Engine:                in.Name,
-		Namespace:             in.Namespace,
-		EngineUID:             string(in.UID),
-		DriverType:            driverType,
-		EmptyRulesPolicy:      emptyRulesPolicy,
-		FailurePolicy:         failurePolicy,
+
+	// The bundled plugin is upstream coraza-proxy-wasm, which resolves data
+	// files only from its compiled-in CoreRuleSet. Refuse rather than publish a
+	// payload whose @pmFromFile references can never resolve.
+	if len(in.Content.DataFiles) > 0 {
+		return Artifact{}, fmt.Errorf("RuleSet has %d data file(s), but the bundled plugin supports only rule text: RuleData delivery is a follow-up", len(in.Content.DataFiles))
+	}
+
+	rules := in.Content.Rules
+	if strings.TrimSpace(rules) == "" {
+		rules = noOpRules
+	}
+	payload, err := CanonicalJSON(pluginConfig{
+		DirectivesMap:     map[string][]string{defaultDirectivesName: {rules}},
+		DefaultDirectives: defaultDirectivesName,
+		FailurePolicy:     failurePolicy,
+		MetricLabels: map[string]string{
+			"engine":    in.Name,
+			"namespace": in.Namespace,
+			"uid":       string(in.UID),
+		},
 		EnableFilterStateLogs: in.EnableFilterStateLogs,
-		Rules:                 in.Content.Rules,
-		DataFiles:             dataFiles,
 	})
 	if err != nil {
 		return Artifact{}, fmt.Errorf("render runtime configuration: %w", err)
@@ -295,18 +313,15 @@ func Matches(accepted AcceptedEngine, a Artifact) error {
 	return nil
 }
 
-// runtimeConfig is the schema_version 1 JSON passed to the plugin.
-type runtimeConfig struct {
-	SchemaVersion         int               `json:"schema_version"`
-	Engine                string            `json:"engine"`
-	Namespace             string            `json:"namespace"`
-	EngineUID             string            `json:"engine_uid"`
-	DriverType            string            `json:"driver_type"`
-	EmptyRulesPolicy      string            `json:"empty_rules_policy"`
-	FailurePolicy         string            `json:"failure_policy"`
-	EnableFilterStateLogs bool              `json:"enable_filter_state_logs"`
-	Rules                 string            `json:"rules"`
-	DataFiles             map[string][]byte `json:"data_files"`
+// pluginConfig is the upstream coraza-proxy-wasm configuration carried in the
+// ECDS Wasm.config.configuration StringValue. The plugin is used unmodified, so
+// the payload must stay within its documented keys.
+type pluginConfig struct {
+	DirectivesMap         map[string][]string `json:"directives_map"`
+	DefaultDirectives     string              `json:"default_directives"`
+	FailurePolicy         string              `json:"failure_policy"`
+	MetricLabels          map[string]string   `json:"metric_labels"`
+	EnableFilterStateLogs bool                `json:"enable_filter_state_logs"`
 }
 
 type vmVersion struct {
@@ -316,7 +331,6 @@ type vmVersion struct {
 }
 
 type engineVersionInput struct {
-	SchemaVersion          int       `json:"schema_version"`
 	RenderingSchemaVersion int       `json:"rendering_schema_version"`
 	Engine                 string    `json:"engine"`
 	Namespace              string    `json:"namespace"`
@@ -334,7 +348,6 @@ type engineVersionInput struct {
 
 func engineVersion(in EngineInput, driverType, emptyRulesPolicy, failurePolicy, runtime, vmID string, codeTimeout time.Duration) (string, error) {
 	raw, err := CanonicalJSON(engineVersionInput{
-		SchemaVersion:          SchemaVersion,
 		RenderingSchemaVersion: RenderingSchemaVersion,
 		Engine:                 in.Name,
 		Namespace:              in.Namespace,
@@ -374,24 +387,10 @@ func buildResource(name string, binary BinaryRef, runtime, vmID string, codeTime
 			VmConfig: &wasmv3.VmConfig{
 				VmId:    vmID,
 				Runtime: runtime,
-				// ECDS delivers this config dynamically; NACK the update until
-				// the remote code is cached instead of applying a filter that
-				// cannot load and fails closed.
-				NackOnCodeCacheMiss: true,
-				Code: &corev3.AsyncDataSource{
-					Specifier: &corev3.AsyncDataSource_Remote{
-						Remote: &corev3.RemoteDataSource{
-							HttpUri: &corev3.HttpUri{
-								Uri: binary.URL,
-								HttpUpstreamType: &corev3.HttpUri_Cluster{
-									Cluster: wasmCluster,
-								},
-								Timeout: durationpb.New(codeTimeout),
-							},
-							Sha256: binary.SHA256,
-						},
-					},
-				},
+				// A remote module that is not cached yet must NACK the push
+				// instead of leaving a filter that cannot load.
+				NackOnCodeCacheMiss: len(binary.Inline) == 0,
+				Code:                wasmCode(binary, codeTimeout),
 			},
 		},
 	}
@@ -405,6 +404,45 @@ func buildResource(name string, binary BinaryRef, runtime, vmID string, codeTime
 		Name:        name,
 		TypedConfig: typedConfig,
 	}, nil
+}
+
+// bundledModule returns the embedded module when the reference points at it, so
+// the resource carries the bytes instead of making Envoy fetch them.
+func bundledModule(binary BinaryRef) []byte {
+	manifest, data, err := assets.ResolveDefault()
+	if err != nil || manifest.SHA256 != binary.SHA256 {
+		return nil
+	}
+	return data
+}
+
+// wasmCode returns inline bytes for the bundled module, or the remote source
+// for a module the user hosts. NackOnCodeCacheMiss is only meaningful for the
+// remote case: Envoy fetches the module when it first applies the config.
+func wasmCode(binary BinaryRef, codeTimeout time.Duration) *corev3.AsyncDataSource {
+	if len(binary.Inline) > 0 {
+		return &corev3.AsyncDataSource{
+			Specifier: &corev3.AsyncDataSource_Local{
+				Local: &corev3.DataSource{
+					Specifier: &corev3.DataSource_InlineBytes{InlineBytes: binary.Inline},
+				},
+			},
+		}
+	}
+	return &corev3.AsyncDataSource{
+		Specifier: &corev3.AsyncDataSource_Remote{
+			Remote: &corev3.RemoteDataSource{
+				HttpUri: &corev3.HttpUri{
+					Uri: binary.URL,
+					HttpUpstreamType: &corev3.HttpUri_Cluster{
+						Cluster: wasmCluster,
+					},
+					Timeout: durationpb.New(codeTimeout),
+				},
+				Sha256: binary.SHA256,
+			},
+		},
+	}
 }
 
 func validateBinaryRef(binary BinaryRef) error {

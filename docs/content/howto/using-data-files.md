@@ -7,6 +7,15 @@ description: "Supply external data files for rules that use the @pmFromFile dire
 
 Some SecLang rules use the `@pmFromFile` directive to match against patterns stored in external data files. The Coraza Kubernetes Operator provides these files from **RuleData** resources, referenced by the **RuleSet** `spec.data` list.
 
+{{% alert title="Not delivered to the plugin yet" color="warning" %}}
+The bundled plugin is upstream `coraza-proxy-wasm`, which resolves data files only from the
+CoreRuleSet compiled into the module. An Engine whose RuleSet references RuleData stays
+`Degraded` (`RenderFailed: ... RuleData delivery is a follow-up`) until the ECDS payload
+gains a data-file channel. Rules that need no external files, or that use the module's
+built-in aliases such as `Include @owasp_crs/*.conf`, work today.
+{{% /alert %}}
+
+
 ## When to use data files
 
 Use data files when your rules reference `@pmFromFile`. For example:

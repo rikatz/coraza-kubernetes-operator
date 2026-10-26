@@ -189,7 +189,7 @@ func TestBuildEnvoyFilterShape(t *testing.T) {
 			assert.Equal(t, "coraza_ecds", nestedString(t, googleGrpc, "stat_prefix"))
 			assert.Equal(t, "envoy.grpc_credentials.file_based_metadata",
 				nestedString(t, googleGrpc, "credentials_factory_name"))
-			assert.Equal(t, int64(16777216),
+			assert.Equal(t, int64(googleGrpcChannelReceiveLimit),
 				nestedInt(t, googleGrpc, "channel_args", "args", "grpc.max_receive_message_length", "int_value"))
 			assert.Equal(t, envoyFilterTestCA,
 				nestedString(t, googleGrpc, "channel_credentials", "ssl_credentials", "root_certs", "inline_string"))

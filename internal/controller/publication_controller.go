@@ -346,13 +346,14 @@ func validateRenderedPayload(payload []byte, limits xds.Limits) error {
 		return fmt.Errorf("runtime payload size %d exceeds the message limit of %d", len(payload), limits.MaxMessageBytes)
 	}
 	var header struct {
-		SchemaVersion int `json:"schema_version"`
+		DefaultDirectives string              `json:"default_directives"`
+		DirectivesMap     map[string][]string `json:"directives_map"`
 	}
 	if err := json.Unmarshal(payload, &header); err != nil {
 		return fmt.Errorf("decode runtime payload: %w", err)
 	}
-	if header.SchemaVersion != render.SchemaVersion {
-		return fmt.Errorf("runtime payload schema version %d is not supported", header.SchemaVersion)
+	if _, ok := header.DirectivesMap[header.DefaultDirectives]; !ok {
+		return fmt.Errorf("runtime payload has no directives for default %q", header.DefaultDirectives)
 	}
 	return nil
 }

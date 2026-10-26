@@ -59,7 +59,9 @@ Rules are delivered to the Gateway over ECDS, and the operator pushes updates as
 
 ## Selecting the WASM Module
 
-By default, the operator serves its own bundled WASM module; no module reference is needed. To use a custom module, specify an HTTPS URL together with its SHA-256 digest:
+By default, the operator sends its own bundled WASM module inside the ECDS configuration; no
+module reference is needed and the proxy does not fetch anything. To use a custom module,
+specify an HTTPS URL together with its SHA-256 digest, and Envoy fetches it:
 
 ```yaml
 spec:

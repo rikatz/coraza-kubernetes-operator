@@ -17,7 +17,6 @@ limitations under the License.
 package render_test
 
 import (
-	"bytes"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -34,6 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 )
@@ -132,15 +132,14 @@ func TestRuleSetContentHash(t *testing.T) {
 
 func TestRenderGoldenPayload(t *testing.T) {
 	input := newEngineInput(t, assemble.Content{
-		Rules:     "SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\"",
-		DataFiles: map[string][]byte{"blocked.txt": []byte("attack\n")},
+		Rules: "SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\"",
 	})
 	input.EnableFilterStateLogs = true
 
 	artifact, err := render.Render(input)
 	require.NoError(t, err)
 
-	want := `{"schema_version":1,"engine":"checkout","namespace":"shop","engine_uid":"11111111-1111-4111-8111-111111111111","driver_type":"wasm","empty_rules_policy":"Reject","failure_policy":"fail","enable_filter_state_logs":true,"rules":"SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\"","data_files":{"blocked.txt":"YXR0YWNrCg=="}}`
+	want := `{"directives_map":{"default":["SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\""]},"default_directives":"default","failure_policy":"fail","metric_labels":{"engine":"checkout","namespace":"shop","uid":"11111111-1111-4111-8111-111111111111"},"enable_filter_state_logs":true}`
 	assert.Equal(t, want, string(artifact.Payload))
 	assert.Equal(t, testResourceRef, artifact.ResourceName)
 	assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, artifact.Version)
@@ -185,6 +184,25 @@ func TestRenderResourceShape(t *testing.T) {
 	var configuration wrapperspb.StringValue
 	require.NoError(t, config.Configuration.UnmarshalTo(&configuration))
 	assert.Equal(t, string(artifact.Payload), configuration.Value)
+
+	t.Run("bundled module is inlined", func(t *testing.T) {
+		manifest, data, err := assets.ResolveDefault()
+		require.NoError(t, err)
+
+		inline := newEngineInput(t, assemble.Content{Rules: "SecRuleEngine On"})
+		inline.Binary = render.BinaryRef{URL: "https://example.com/" + manifest.SHA256 + ".wasm", SHA256: manifest.SHA256}
+
+		artifact, err := render.Render(inline)
+		require.NoError(t, err)
+
+		var filter wasmhttp.Wasm
+		require.NoError(t, artifact.Resource.TypedConfig.UnmarshalTo(&filter))
+		vm := filter.GetConfig().GetVmConfig()
+		require.NotNil(t, vm)
+		assert.False(t, vm.NackOnCodeCacheMiss)
+		assert.Nil(t, vm.GetCode().GetRemote())
+		assert.Equal(t, data, vm.GetCode().GetLocal().GetInlineBytes())
+	})
 }
 
 func TestRenderEmptyRulesPolicy(t *testing.T) {
@@ -200,36 +218,9 @@ func TestRenderEmptyRulesPolicy(t *testing.T) {
 
 		artifact, err := render.Render(input)
 		require.NoError(t, err)
-		assert.Contains(t, string(artifact.Payload), `"rules":""`)
-		assert.Contains(t, string(artifact.Payload), `"data_files":{}`)
-		assert.Contains(t, string(artifact.Payload), `"empty_rules_policy":"Allow"`)
+		assert.Contains(t, string(artifact.Payload), `"directives_map":{"default":["SecRuleEngine Off\n"]}`)
+		assert.Contains(t, string(artifact.Payload), `"default_directives":"default"`)
 	})
-}
-
-func TestRenderDeterminism(t *testing.T) {
-	rng := rand.New(rand.NewSource(7))
-	names := []string{"a.txt", "b.txt", "c.txt"}
-
-	var first render.Artifact
-	for i := 0; i < 100; i++ {
-		files := make(map[string][]byte, len(names))
-		for _, idx := range rng.Perm(len(names)) {
-			files[names[idx]] = []byte("data-" + names[idx])
-		}
-		input := newEngineInput(t, assemble.Content{
-			Rules:     "SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny\"",
-			DataFiles: files,
-		})
-
-		artifact, err := render.Render(input)
-		require.NoError(t, err)
-		if i == 0 {
-			first = artifact
-			continue
-		}
-		assert.Equal(t, first.Version, artifact.Version)
-		assert.Equal(t, string(first.Payload), string(artifact.Payload))
-	}
 }
 
 func TestEngineVersionInputs(t *testing.T) {
@@ -241,7 +232,6 @@ func TestEngineVersionInputs(t *testing.T) {
 	t.Run("metadata-only input changes do not change the version", func(t *testing.T) {
 		firstContent, err := assemble.Assemble(assemble.Inputs{
 			Sources: []assemble.SourceInput{{Name: "rules", UID: types.UID("source-a"), Generation: 1, Rules: "SecRuleEngine On"}},
-			Data:    []assemble.DataInput{{Name: "data", UID: types.UID("data-a"), Generation: 1, Files: map[string]string{"a.txt": "a"}}},
 		})
 		require.NoError(t, err)
 
@@ -249,7 +239,6 @@ func TestEngineVersionInputs(t *testing.T) {
 		// effective content did not.
 		secondContent, err := assemble.Assemble(assemble.Inputs{
 			Sources: []assemble.SourceInput{{Name: "rules", UID: types.UID("source-b"), Generation: 9, Rules: "SecRuleEngine On"}},
-			Data:    []assemble.DataInput{{Name: "data", UID: types.UID("data-b"), Generation: 9, Files: map[string]string{"a.txt": "a"}}},
 		})
 		require.NoError(t, err)
 
@@ -329,6 +318,16 @@ func TestRenderRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestRenderRejectsDataFiles(t *testing.T) {
+	input := newEngineInput(t, assemble.Content{
+		Rules:     "SecRuleEngine On",
+		DataFiles: map[string][]byte{"blocked.txt": []byte("attack")},
+	})
+
+	_, err := render.Render(input)
+	require.ErrorContains(t, err, "RuleData delivery is a follow-up")
+}
+
 func TestMatches(t *testing.T) {
 	input := newEngineInput(t, assemble.Content{Rules: "SecRuleEngine On"})
 	artifact, err := render.Render(input)
@@ -353,7 +352,7 @@ func TestMatches(t *testing.T) {
 		field  string
 		mutate func(*render.AcceptedEngine)
 	}{
-		{name: "rendering schema version", field: "rendering schema version", mutate: func(a *render.AcceptedEngine) { a.RenderingSchemaVersion = 2 }},
+		{name: "rendering schema version", field: "rendering schema version", mutate: func(a *render.AcceptedEngine) { a.RenderingSchemaVersion = render.RenderingSchemaVersion + 1 }},
 		{name: "version", field: "version", mutate: func(a *render.AcceptedEngine) { a.Version = "sha256:" + strings.Repeat("0", 64) }},
 		{name: "RuleSet uid", field: "RuleSet uid", mutate: func(a *render.AcceptedEngine) { a.RuleSetUID = "other" }},
 		{name: "RuleSet content hash", field: "RuleSet content hash", mutate: func(a *render.AcceptedEngine) { a.RuleSetContentHash = "sha256:" + strings.Repeat("0", 64) }},
@@ -384,13 +383,7 @@ func TestRenderSizeEnvelope(t *testing.T) {
 		fmt.Fprintf(&rules, "SecRule REQUEST_HEADERS:X-Test-%d \"@rx ^[a-z0-9]+$\" \"id:%d,phase:2,pass,nolog,msg:'CRS-sized fixture line %d'\"\n", i, 100000+i, i)
 	}
 
-	input := newEngineInput(t, assemble.Content{
-		Rules: rules.String(),
-		DataFiles: map[string][]byte{
-			"blocked.txt": bytes.Repeat([]byte("attack\n"), 1<<17),
-			"allowed.txt": bytes.Repeat([]byte("benign\n"), 1<<17),
-		},
-	})
+	input := newEngineInput(t, assemble.Content{Rules: rules.String()})
 
 	artifact, err := render.Render(input)
 	require.NoError(t, err)

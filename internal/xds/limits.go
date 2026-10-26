@@ -31,8 +31,9 @@ import (
 // -----------------------------------------------------------------------------
 
 const (
-	// DefaultMaxMessageBytes bounds a single gRPC message (16 MiB).
-	DefaultMaxMessageBytes = 16 << 20
+	// DefaultMaxMessageBytes bounds a single gRPC message (32 MiB). The
+	// bundled module travels inline in the ECDS resource.
+	DefaultMaxMessageBytes = 32 << 20
 	// DefaultMaxDecodedDataBytes bounds the decoded RuleData carried by one
 	// Engine (12 MiB). It must stay below the base64-expanded message limit.
 	DefaultMaxDecodedDataBytes = 12 << 20
