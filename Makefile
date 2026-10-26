@@ -209,17 +209,19 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 	if [ "$$want" != "$$got" ]; then echo "wasm.verify: digest mismatch: manifest $$want, $(ASSETS_DIR)/plugin.wasm $$got" >&2; exit 1; fi; \
 	echo "wasm.verify: $$got $(ASSETS_DIR)/plugin.wasm ok"
 
-# Upstream coraza-proxy-wasm built for the demo. The operator payload is the
-# upstream plugin configuration, so the released plugin runs unmodified.
+# coraza-proxy-wasm built for the demo. Path B needs the ECDS-aware plugin branch
+# (schema-versioned payload with RuleData files); point WASM_PLUGIN_DIR at a
+# local worktree of it to build without publishing anything, e.g.:
+#   make demo WASM_PLUGIN_DIR=/path/to/coraza-proxy-wasm-ecds
 WASM_PLUGIN_REPO ?= https://github.com/corazawaf/coraza-proxy-wasm
-WASM_PLUGIN_VERSION ?= 0.6.0
+WASM_PLUGIN_VERSION ?= 75579c7
 WASM_PLUGIN_DIR ?= $(CURDIR)/.cache/coraza-proxy-wasm
 # TinyGo 0.34 supports Go 1.19-1.23 only; pin the toolchain the plugin builds with.
 WASM_GO_TOOLCHAIN ?= go1.23.12
 TINYGO ?= $(HOME)/bin/tinygocoraza/tinygo/bin/tinygo
 
 .PHONY: wasm.plugin
-wasm.plugin: ## Build the upstream coraza-proxy-wasm module (skipped when WASM_MODULE is set)
+wasm.plugin: ## Build the ECDS-aware coraza-proxy-wasm module (skipped when WASM_MODULE is set)
 	@set -e; \
 	if [ -n "$(WASM_MODULE)" ]; then \
 		echo "wasm.plugin: reusing $(WASM_MODULE)"; \
@@ -229,7 +231,10 @@ wasm.plugin: ## Build the upstream coraza-proxy-wasm module (skipped when WASM_M
 		echo "wasm.plugin: cloning $(WASM_PLUGIN_REPO)"; \
 		git clone --quiet "$(WASM_PLUGIN_REPO)" "$(WASM_PLUGIN_DIR)"; \
 	fi; \
-	git -C "$(WASM_PLUGIN_DIR)" fetch --quiet origin; \
+	if ! git -C "$(WASM_PLUGIN_DIR)" rev-parse --verify --quiet "$(WASM_PLUGIN_VERSION)^{commit}" >/dev/null; then \
+		echo "wasm.plugin: fetching $(WASM_PLUGIN_VERSION)"; \
+		git -C "$(WASM_PLUGIN_DIR)" fetch --quiet --all --tags; \
+	fi; \
 	git -C "$(WASM_PLUGIN_DIR)" checkout --quiet "$(WASM_PLUGIN_VERSION)"; \
 	echo "wasm.plugin: building $(WASM_PLUGIN_VERSION) with $$($(TINYGO) version)"; \
 	cd "$(WASM_PLUGIN_DIR)" && \
@@ -712,17 +717,19 @@ demo.verify: ## Assert the demo Gateway passes normal traffic and blocks the dem
 	done; \
 	[ -n "$$addr" ] || { echo "ERROR: Gateway coraza-gateway has no address" >&2; exit 1; }; \
 	echo "=== Sending demo traffic to http://$$addr/ ==="; \
-	allowed=""; blocked=""; \
+	allowed=""; blocked=""; data=""; \
 	deadline=$$(($$(date +%s) + 240)); \
 	while [ "$$(date +%s)" -lt "$$deadline" ]; do \
 		allowed=$$(curl -s -o /dev/null -w '%{http_code}' "http://$$addr/" || true); \
 		blocked=$$(curl -s -o /dev/null -w '%{http_code}' "http://$$addr/?q=evilmonkey" || true); \
-		[ "$$allowed" = "200" ] && [ "$$blocked" = "403" ] && break; \
+		data=$$(curl -s -o /dev/null -w '%{http_code}' "http://$$addr/?q=evildata" || true); \
+		[ "$$allowed" = "200" ] && [ "$$blocked" = "403" ] && [ "$$data" = "403" ] && break; \
 		sleep 5; \
 	done; \
 	echo "  allowed  GET /                      -> $$allowed (want 200)"; \
 	echo "  blocked  GET /?q=evilmonkey         -> $$blocked (want 403)"; \
-	[ "$$allowed" = "200" ] && [ "$$blocked" = "403" ] || { \
+	echo "  blocked  GET /?q=evildata           -> $$data (want 403, @pmFromFile RuleData)"; \
+	[ "$$allowed" = "200" ] && [ "$$blocked" = "403" ] && [ "$$data" = "403" ] || { \
 		echo "ERROR: the WAF is not enforcing (is the WASM module loaded?)" >&2; exit 1; }; \
 	echo "=== Demo verified: rules from the cluster block the request ==="
 

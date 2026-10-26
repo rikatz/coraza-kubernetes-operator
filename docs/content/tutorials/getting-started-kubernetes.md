@@ -18,18 +18,26 @@ Gateway, demo rules, and the real `coraza-proxy-wasm` module — run from the re
 make demo
 ```
 
+To build the ECDS-aware plugin from a local worktree instead of the default
+checkout (Path B, RuleData delivery, needs the `ecds/ecds-consumer` branch):
+
+```bash
+make demo WASM_PLUGIN_DIR=/path/to/coraza-proxy-wasm-ecds
+```
+
 It builds the plugin with TinyGo, bundles it into the operator image, creates the cluster
 with Istio (Sail operator), installs the operator, applies `config/samples`, and asserts that
-a normal request passes while the demo attack is blocked:
+a normal request passes while the demo attacks are blocked:
 
 ```
   allowed  GET /                      -> 200 (want 200)
   blocked  GET /?q=evilmonkey         -> 403 (want 403)
+  blocked  GET /?q=evildata           -> 403 (want 403, @pmFromFile RuleData)
 ```
 
 Requirements: Docker, `kind`, `helm`, `kubectl`, and TinyGo 0.34 (`TINYGO=/path/to/tinygo`
 overrides the default `$HOME/bin/tinygocoraza/tinygo/bin/tinygo`). The first run clones the
-pinned upstream plugin into `.cache/` and downloads the Go 1.23 toolchain TinyGo needs. The
+pinned plugin into `.cache/` and downloads the Go 1.23 toolchain TinyGo needs. The
 built module replaces the fixture in `internal/assets`; restore it with
 `git checkout internal/assets`.
 
