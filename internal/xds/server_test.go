@@ -18,7 +18,6 @@ package xds
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -298,26 +297,122 @@ func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
 		t.Fatalf("resubscribed version = %q, want sha256:v1.retry1", got)
 	}
 
-	// The accepted version never changes, so the publication loop coalesces.
+	// A second rejection bumps again, and the accepted version never changes so
+	// the publication loop still coalesces.
+	stream = fixture.open(t, validToken, fixture.resourceName)
+	second := recv(t, stream)
+	if got := second.GetVersionInfo(); got != "sha256:v1.retry1" {
+		t.Fatalf("version_info = %q, want sha256:v1.retry1", got)
+	}
+	nack(stream, second)
+	_ = recvCode(t, stream)
+	require.Eventually(t, func() bool { return cachedVersion() == "sha256:v1.retry2" }, time.Second, 5*time.Millisecond)
+
 	snapshot, ok := fixture.store.Get(testNamespace + "/" + streamEngine)
 	require.True(t, ok)
 	if snapshot.Version != "sha256:v1" {
 		t.Fatalf("accepted version = %q, want sha256:v1", snapshot.Version)
 	}
+}
 
-	// The retry budget is bounded: further NACKs stop bumping.
-	for attempt := 2; attempt <= nackRetryLimit; attempt++ {
-		stream := fixture.open(t, validToken, fixture.resourceName)
-		response := recv(t, stream)
-		nack(stream, response)
-		_ = recvCode(t, stream)
-		require.Eventually(t, func() bool {
-			return cachedVersion() == fmt.Sprintf("sha256:v1.retry%d", attempt)
-		}, time.Second, 5*time.Millisecond)
+func TestStreamNackRetryBudgetExpires(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = 0
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	// A retry budget that already ran out its window must not bump again.
+	fixture.server.nacks.Store(fixture.resourceName, nackState{
+		version:  "sha256:v1",
+		attempts: 1,
+		first:    time.Now().Add(-time.Hour),
+	})
+
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	first := recv(t, stream)
+	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		VersionInfo:   first.GetVersionInfo(),
+		ResponseNonce: first.GetNonce(),
+		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	}); err != nil {
+		t.Fatal(err)
 	}
+
+	// No close, no bump: the proxy stays on the rejected configuration.
+	expectNoResult(t, startRecv(stream), 200*time.Millisecond)
+	cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+	require.NoError(t, err)
+	if got := cached.GetVersion(resource.ExtensionConfigType); got != "sha256:v1" {
+		t.Fatalf("cached version = %q, want sha256:v1 (no retry published)", got)
+	}
+}
+
+func TestStreamNackRepublishFailureKeepsStream(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = 0
+	// A resource that is not a decodable WASM config cannot be retried.
+	snapshot := fixture.snapshot(t, "v1")
+	snapshot.Resource = &corev3.TypedExtensionConfig{Name: fixture.resourceName}
+	require.NoError(t, fixture.store.Replace(snapshot))
+
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	first := recv(t, stream)
+	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		VersionInfo:   first.GetVersionInfo(),
+		ResponseNonce: first.GetNonce(),
+		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	expectNoResult(t, startRecv(stream), 200*time.Millisecond)
+	cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+	require.NoError(t, err)
+	if got := cached.GetVersion(resource.ExtensionConfigType); got != "sha256:v1" {
+		t.Fatalf("cached version = %q, want sha256:v1 (retry must not publish)", got)
+	}
+}
+
+func TestStreamAckResetsNackBudget(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = 0
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	// The budget is exhausted for this configuration.
+	fixture.server.nacks.Store(fixture.resourceName, nackState{
+		version:  "sha256:v1",
+		attempts: nackRetryLimit + 1,
+		first:    time.Now(),
+	})
+
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	first := recv(t, stream)
+	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		VersionInfo:   first.GetVersionInfo(),
+		ResponseNonce: first.GetNonce(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An acknowledgement clears the budget, so a later rejection is retried.
+	require.Eventually(t, func() bool {
+		_, ok := fixture.server.nacks.Load(fixture.resourceName)
+		return !ok
+	}, time.Second, 5*time.Millisecond)
+
 	stream = fixture.open(t, validToken, fixture.resourceName)
-	nack(stream, recv(t, stream))
-	expectNoResult(t, startRecv(stream), 150*time.Millisecond)
+	second := recv(t, stream)
+	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		VersionInfo:   second.GetVersionInfo(),
+		ResponseNonce: second.GetNonce(),
+		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code := recvCode(t, stream); code != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", code)
+	}
 }
 
 func TestStreamNackBeforeSubscriptionStillResubscribes(t *testing.T) {

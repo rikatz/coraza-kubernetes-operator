@@ -41,14 +41,18 @@ const (
 	// retryVersionSuffix marks a republished configuration.
 	retryVersionSuffix = ".retry"
 
-	// nackRetryLimit bounds how many times one rejected version is retried.
-	nackRetryLimit = 3
+	// nackRetryLimit caps how many times one rejected configuration is retried.
+	nackRetryLimit = 10
+	// nackRetryWindow bounds the retries by time as well, so a slow module fetch
+	// gets more attempts than a fast one without allowing an endless loop.
+	nackRetryWindow = 20 * time.Second
 )
 
 // nackState tracks retries for one ECDS resource's current version.
 type nackState struct {
 	version  string
 	attempts int
+	first    time.Time
 }
 
 // lifecycleKey carries the stream's cancel function from the interceptor into
@@ -331,7 +335,7 @@ func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejected
 	if i := strings.Index(base, retryVersionSuffix); i > 0 {
 		base = base[:i]
 	}
-	state := nackState{version: base}
+	state := nackState{version: base, first: time.Now()}
 	if prev, ok := s.nacks.Load(resourceName); ok {
 		if current, ok := prev.(nackState); ok && current.version == base {
 			state = current
@@ -339,8 +343,9 @@ func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejected
 	}
 	state.attempts++
 	s.nacks.Store(resourceName, state)
-	if state.attempts > nackRetryLimit {
-		s.Logger.Info("ECDS retry budget exhausted", "resource", resourceName, "version", rejectedVersion)
+	if state.attempts > nackRetryLimit || time.Since(state.first) > nackRetryWindow {
+		s.Logger.Info("ECDS retry budget exhausted",
+			"resource", resourceName, "version", rejectedVersion, "attempts", state.attempts)
 		return
 	}
 	s.Logger.Info("resubscribing proxy after rejected configuration",

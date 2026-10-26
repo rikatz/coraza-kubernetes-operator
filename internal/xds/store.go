@@ -99,7 +99,11 @@ func (s *SnapshotStore) BumpRejected(resourceName string, attempt int) error {
 	if vm == nil {
 		return errors.New("rejected WASM configuration has no VM")
 	}
-	// Envoy remembers the typed-config hash even after a NACK; a version-only retry is skipped.
+	// Envoy remembers the typed-config hash even after a NACK, so a version-only
+	// retry is skipped and the filter is never created. Changing the VM ID makes
+	// the typed config differ and Envoy instantiates it from the fetched module.
+	// shortcut: the VM ID doubles as a typed-config generation marker; drop this
+	// once Envoy retries failed filter creations on its own.
 	vm.VmId = fmt.Sprintf("%s.retry%d", vm.VmId, attempt)
 	typed, err := anypb.New(&wasm)
 	if err != nil {
