@@ -16,9 +16,8 @@ limitations under the License.
 
 // Package assets resolves the WASM modules bundled with the operator.
 //
-// This is the Phase 2 skeleton: an embedded dev fixture. Release builds
-// (Phase 5) replace plugin.wasm and plugin.manifest.yaml with the real module
-// and its manifest.
+// The committed module is a development fixture; release builds replace
+// plugin.wasm and plugin.manifest.yaml with the published module and manifest.
 package assets
 
 import (
