@@ -227,7 +227,7 @@ wasm.plugin: ## Build the ECDS-aware coraza-proxy-wasm module (skipped when WASM
 		echo "wasm.plugin: reusing $(WASM_MODULE)"; \
 		exit 0; \
 	fi; \
-	if [ ! -d "$(WASM_PLUGIN_DIR)/.git" ]; then \
+	if [ ! -e "$(WASM_PLUGIN_DIR)/.git" ]; then \
 		echo "wasm.plugin: cloning $(WASM_PLUGIN_REPO)"; \
 		git clone --quiet "$(WASM_PLUGIN_REPO)" "$(WASM_PLUGIN_DIR)"; \
 	fi; \
