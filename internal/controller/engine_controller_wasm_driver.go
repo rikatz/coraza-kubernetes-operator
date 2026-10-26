@@ -35,6 +35,7 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
 // -----------------------------------------------------------------------------
@@ -143,6 +144,20 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		return r.awaitRuleSetAcceptance(ctx, log, req, engine, msg)
 	}
 
+	// Accept only content the ECDS serving plane can deliver. Checking here
+	// keeps readiness honest: the publication reconciler refuses oversized
+	// payloads silently.
+	limits := r.Limits
+	if limits.MaxMessageBytes <= 0 {
+		limits = xds.DefaultLimits()
+	}
+	if err := validateContentLimits(content, limits); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("RuleSet %s content exceeds delivery limits: %v", ruleSet.Name, err)); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+
 	failurePolicy := engineFailurePolicy(engine)
 	logDebug(log, req, "Engine", "Rendering Engine configuration")
 	artifact, err := render.Render(render.EngineInput{
@@ -159,6 +174,12 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	})
 	if err != nil {
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Failed to render Engine configuration: %v", err)); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+	if err := validateRenderedPayload(artifact.Payload, limits); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Rendered Engine configuration exceeds delivery limits: %v", err)); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err

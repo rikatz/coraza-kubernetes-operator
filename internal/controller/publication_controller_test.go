@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -264,4 +265,40 @@ func TestPublicationReconcilerSetupWithoutLeaderElection(t *testing.T) {
 	reconciler := newPublicationReconciler(t)
 	require.NoError(t, reconciler.SetupWithManager(mgr),
 		"publication must run on every replica (NeedLeaderElection=false)")
+}
+
+// TestDefaultLimitsDeliverMaxDecodedData pins the arithmetic behind
+// DefaultMaxDecodedDataBytes: the decoded-data limit, split across the maximum
+// number of maximum-length file names, still renders a payload the ECDS
+// message limit accepts.
+func TestDefaultLimitsDeliverMaxDecodedData(t *testing.T) {
+	limits := xds.DefaultLimits()
+	files := make(map[string][]byte, limits.MaxDataFiles)
+	perFile := limits.MaxDecodedDataBytes / limits.MaxDataFiles
+	remaining := limits.MaxDecodedDataBytes
+	for i := range limits.MaxDataFiles {
+		size := min(perFile, remaining)
+		files[fmt.Sprintf("%0253d", i)] = make([]byte, size)
+		remaining -= size
+	}
+
+	content := assemble.Content{Rules: publicationRules, DataFiles: files}
+	require.NoError(t, validateContentLimits(content, limits), "the fixture must sit exactly at the content limits")
+
+	hash, err := render.RuleSetContentHash(content)
+	require.NoError(t, err)
+	artifact, err := render.Render(render.EngineInput{
+		Namespace: "default",
+		Name:      "delivery-limits",
+		UID:       "11111111-1111-4111-8111-111111111111",
+		RuleSet: render.RuleSetAccepted{
+			UID:         "22222222-2222-4222-8222-222222222222",
+			ContentHash: hash,
+		},
+		Content: content,
+		Binary:  render.BinaryRef{URL: "https://example.com/plugin.wasm", SHA256: testSHA256},
+	})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(artifact.Payload), limits.MaxMessageBytes)
+	require.NoError(t, validateRenderedPayload(artifact.Payload, limits))
 }

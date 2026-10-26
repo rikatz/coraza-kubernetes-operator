@@ -36,6 +36,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
@@ -325,6 +326,106 @@ func TestEngineReconciler_TLSNotConfiguredFailsClosed(t *testing.T) {
 	assert.Equal(t, metav1.ConditionTrue, degraded.Status)
 	assert.Equal(t, reasonTLSNotConfigured, degraded.Reason)
 	requireNoEnvoyFilter(t, ctx, engine.Name, engine.Namespace)
+}
+
+// newDeliveryLimitEngineFixture creates an accepted RuleSet (with one RuleData
+// file) and an Engine that references it.
+func newDeliveryLimitEngineFixture(t *testing.T, ctx context.Context, ns, name string) *wafv1alpha1.Engine {
+	t.Helper()
+	createTestGateway(t, ctx, k8sClient, name+"-gw", ns)
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      name + "-ruleset",
+		Namespace: ns,
+		Data:      []wafv1alpha1.DataReference{{Name: name + "-data"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	acceptTestRuleSet(t, ctx, ruleSet, testAcceptDataRuleText)
+
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        name + "-engine",
+		Namespace:   ns,
+		GatewayName: name + "-gw",
+		RuleSetName: ruleSet.Name,
+		WasmURL:     utils.DefaultTestWasmURL,
+		WasmSHA256:  utils.DefaultTestWasmSHA256,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	return engine
+}
+
+// expectAcceptanceDegraded runs the finalizer reconcile plus one provisioning
+// reconcile and asserts the Engine was degraded without recording an accepted
+// configuration or attaching an EnvoyFilter.
+func expectAcceptanceDegraded(t *testing.T, ctx context.Context, reconciler *EngineReconciler, engine *wafv1alpha1.Engine, reason string) *metav1.Condition {
+	t.Helper()
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+	_, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	_, err = reconciler.Reconcile(ctx, req)
+	require.Error(t, err)
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(engine), &updated))
+	require.NotNil(t, updated.Status)
+	assert.Nil(t, updated.Status.AcceptedConfiguration, "oversized content must not be accepted")
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+	assert.Equal(t, reason, degraded.Reason)
+	requireNoEnvoyFilter(t, ctx, engine.Name, engine.Namespace)
+	return degraded
+}
+
+func TestEngineReconciler_RejectsContentOverLimits(t *testing.T) {
+	tests := []struct {
+		name string
+		tune func(*xds.Limits)
+		want string
+	}{
+		{
+			name: "decoded RuleData bytes",
+			tune: func(l *xds.Limits) { l.MaxDecodedDataBytes = 4 },
+			want: "decoded RuleData size 9 exceeds the limit of 4",
+		},
+		{
+			name: "RuleData file count",
+			tune: func(l *xds.Limits) { l.MaxDataFiles = 0 },
+			want: "RuleData file count 1 exceeds the limit of 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			ns := setupTestNamespace(t, ctx)
+			engine := newDeliveryLimitEngineFixture(t, ctx, ns, "content-limit")
+
+			reconciler := newAcceptedEngineTestReconciler()
+			limits := xds.DefaultLimits()
+			tt.tune(&limits)
+			reconciler.Limits = limits
+
+			degraded := expectAcceptanceDegraded(t, ctx, reconciler, engine, "InvalidRuleSet")
+			assert.Contains(t, degraded.Message, "exceeds delivery limits")
+			assert.Contains(t, degraded.Message, tt.want)
+		})
+	}
+}
+
+func TestEngineReconciler_RejectsPayloadOverMessageLimit(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+	engine := newDeliveryLimitEngineFixture(t, ctx, ns, "payload-limit")
+
+	reconciler := newAcceptedEngineTestReconciler()
+	limits := xds.DefaultLimits()
+	limits.MaxMessageBytes = 128
+	reconciler.Limits = limits
+
+	degraded := expectAcceptanceDegraded(t, ctx, reconciler, engine, "RenderFailed")
+	assert.Contains(t, degraded.Message, "exceeds delivery limits")
+	assert.Contains(t, degraded.Message, "message limit of 128")
 }
 
 func TestEngineReconciler_AcceptsConfigurationAndAttachesEnvoyFilter(t *testing.T) {

@@ -58,7 +58,7 @@ The operator serves Envoy Configuration Discovery Service (ECDS) streams and the
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--xds-max-message-bytes` | `16777216` (16 MiB) | Maximum gRPC message size for the ECDS server. |
-| `--xds-max-decoded-data-bytes` | `12582912` (12 MiB) | Maximum decoded RuleData bytes carried by one Engine. |
+| `--xds-max-decoded-data-bytes` | `8388608` (8 MiB) | Maximum decoded RuleData bytes carried by one Engine. |
 | `--xds-max-data-files` | `4096` | Maximum number of RuleData files carried by one Engine. |
 | `--xds-max-streams` | `512` | Maximum concurrent ECDS streams per replica. |
 | `--xds-max-streams-per-identity` | `8` | Maximum concurrent ECDS streams per authenticated ServiceAccount. |

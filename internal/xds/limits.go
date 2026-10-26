@@ -34,8 +34,11 @@ const (
 	// DefaultMaxMessageBytes bounds a single gRPC message (16 MiB).
 	DefaultMaxMessageBytes = 16 << 20
 	// DefaultMaxDecodedDataBytes bounds the decoded RuleData carried by one
-	// Engine (12 MiB). It must stay below the base64-expanded message limit.
-	DefaultMaxDecodedDataBytes = 12 << 20
+	// Engine (8 MiB). RuleData is base64-encoded in the payload (4/3
+	// expansion), so 8 MiB becomes ~10.7 MiB, leaving ~5.3 MiB of the 16 MiB
+	// message for rule text and JSON keys (4096 maximum-length names add
+	// ~1 MiB).
+	DefaultMaxDecodedDataBytes = 8 << 20
 	// DefaultMaxDataFiles bounds the number of RuleData files per Engine.
 	DefaultMaxDataFiles = 4096
 	// DefaultMaxStreams bounds concurrent ECDS streams per replica.

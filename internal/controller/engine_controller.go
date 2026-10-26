@@ -45,6 +45,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
 // -----------------------------------------------------------------------------
@@ -80,6 +81,9 @@ type EngineReconciler struct {
 	// bundled module is served at <assetBaseURL>/wasm/<sha256>.wasm.
 	assetBaseURL      string
 	operatorNamespace string
+	// Limits bounds the configuration an Engine may accept. Acceptance must
+	// reject content the ECDS serving plane could not deliver.
+	Limits xds.Limits
 
 	// tokenStore is a thread-safe store for cache client tokens, keyed by
 	// "namespace/engineName/rulesetName". Uses sync.Map for simple concurrent access.

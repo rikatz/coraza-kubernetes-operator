@@ -89,6 +89,11 @@ func SetupControllers(mgr ctrl.Manager, deps ControllerDeps) error {
 		return fmt.Errorf("unable to create controller RuleSource: %w", err)
 	}
 
+	xdsLimits := xds.DefaultLimits()
+	if deps.XDS != nil {
+		xdsLimits = deps.XDS.Limits
+	}
+
 	if err := (&EngineReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
@@ -99,6 +104,7 @@ func SetupControllers(mgr ctrl.Manager, deps ControllerDeps) error {
 		xdsConfig:         deps.ECDSConfig,
 		assetBaseURL:      deps.AssetBaseURL,
 		operatorNamespace: deps.OperatorNamespace,
+		Limits:            xdsLimits,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller Engine: %w", err)
 	}
