@@ -276,3 +276,18 @@ func TestFingerprint(t *testing.T) {
 	contentChanged.Sources[0].Rules = "SecRuleEngine On "
 	assert.NotEqual(t, first, assemble.Fingerprint(contentChanged))
 }
+
+func TestAssembleRejectsReservedDataFileNames(t *testing.T) {
+	_, err := assemble.Assemble(assemble.Inputs{
+		Sources: []assemble.SourceInput{{Name: "rules", Rules: "SecRuleEngine On"}},
+		Data: []assemble.DataInput{{
+			Name:  "data",
+			Files: map[string]string{".": "x", "..": "y", "ok.data": "z"},
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "spec.data contains invalid data file name(s)")
+	assert.Contains(t, err.Error(), `"."`)
+	assert.Contains(t, err.Error(), `".."`)
+	assert.Contains(t, err.Error(), "RuleData data")
+}

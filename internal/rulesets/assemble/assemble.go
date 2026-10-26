@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 
@@ -145,6 +146,22 @@ func validateReferences(in Inputs) error {
 
 	if dups := duplicateNames(in.Data, func(d DataInput) string { return d.Name }); len(dups) > 0 {
 		msgs = append(msgs, fmt.Sprintf("spec.data contains duplicate RuleData name(s): %s", strings.Join(dups, ", ")))
+	}
+
+	// The plugin resolves every data file name with fs.ValidPath and rejects
+	// ".", failing the whole configuration. CEL only guards writes, so objects
+	// created before that rule existed must be caught here.
+	var invalid []string
+	for _, data := range in.Data {
+		for name := range data.Files {
+			if name == "." || !fs.ValidPath(name) {
+				invalid = append(invalid, fmt.Sprintf("%q (RuleData %s)", name, data.Name))
+			}
+		}
+	}
+	if len(invalid) > 0 {
+		sort.Strings(invalid)
+		msgs = append(msgs, fmt.Sprintf("spec.data contains invalid data file name(s): %s", strings.Join(invalid, ", ")))
 	}
 
 	if len(msgs) > 0 {
