@@ -656,7 +656,10 @@ demo.workload: ## Apply the demo CRs (config/samples) and wait for acceptance
 	kubectl --context "$$ctx" cluster-info >/dev/null; \
 	echo "=== Applying demo workload (config/samples) to $(DEMO_NAMESPACE) ==="; \
 	kubectl --context "$$ctx" create namespace "$(DEMO_NAMESPACE)" 2>/dev/null || true; \
-	kubectl --context "$$ctx" apply -n "$(DEMO_NAMESPACE)" -k "$(CURDIR)/config/samples"; \
+	# Server-side apply with forced conflicts keeps the demo idempotent after a
+	# manual edit of a sample object.
+	kubectl --context "$$ctx" apply --server-side --force-conflicts \
+		-n "$(DEMO_NAMESPACE)" -k "$(CURDIR)/config/samples"; \
 	kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" wait --for=condition=Available \
 		deployment/echo --timeout=300s; \
 	echo "=== Waiting for Engine Ready ==="; \
