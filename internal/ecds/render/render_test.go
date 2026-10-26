@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 )
@@ -184,6 +185,24 @@ func TestRenderResourceShape(t *testing.T) {
 	require.NoError(t, config.Configuration.UnmarshalTo(&configuration))
 	assert.Equal(t, string(artifact.Payload), configuration.Value)
 
+	t.Run("bundled module is inlined", func(t *testing.T) {
+		manifest, data, err := assets.ResolveDefault()
+		require.NoError(t, err)
+
+		inline := newEngineInput(t, assemble.Content{Rules: "SecRuleEngine On"})
+		inline.Binary = render.BinaryRef{URL: "https://example.com/" + manifest.SHA256 + ".wasm", SHA256: manifest.SHA256}
+
+		artifact, err := render.Render(inline)
+		require.NoError(t, err)
+
+		var filter wasmhttp.Wasm
+		require.NoError(t, artifact.Resource.TypedConfig.UnmarshalTo(&filter))
+		vm := filter.GetConfig().GetVmConfig()
+		require.NotNil(t, vm)
+		assert.False(t, vm.NackOnCodeCacheMiss)
+		assert.Nil(t, vm.GetCode().GetRemote())
+		assert.Equal(t, data, vm.GetCode().GetLocal().GetInlineBytes())
+	})
 }
 
 func TestRenderEmptyRulesPolicy(t *testing.T) {

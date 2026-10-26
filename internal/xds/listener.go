@@ -26,10 +26,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
@@ -67,17 +69,19 @@ type ListenerConfig struct {
 type Listener struct {
 	config  ListenerConfig
 	handler http.Handler
+	h2      *http2.Server
 	grpc    *grpc.Server
 	http    *http.Server
 	certs   *certificateReloader
 	caPEM   []byte
 	logger  logr.Logger
 
-	mu       sync.Mutex
-	listener net.Listener
-	bound    bool
-	started  chan struct{}
-	ready    bool
+	mu          sync.Mutex
+	listener    net.Listener
+	connections map[net.Conn]struct{}
+	bound       bool
+	started     chan struct{}
+	ready       bool
 }
 
 // NewListener loads the serving certificate and CA, prepares the gRPC and HTTP
@@ -120,6 +124,7 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 	return &Listener{
 		config:  config,
 		handler: handler,
+		h2:      &http2.Server{IdleTimeout: assetIdleTimeout},
 		grpc:    grpcServer,
 		http: &http.Server{
 			Handler:           handler,
@@ -163,7 +168,6 @@ func (l *Listener) Start(ctx context.Context) error {
 		return fmt.Errorf("bind xDS listener on %s: %w", l.config.BindAddress, err)
 	}
 	tlsListener := tls.NewListener(base, l.tlsConfig())
-	h2 := newConnListener(tlsListener.Addr())
 	http1 := newConnListener(tlsListener.Addr())
 
 	l.mu.Lock()
@@ -173,10 +177,9 @@ func (l *Listener) Start(ctx context.Context) error {
 	close(l.started)
 	l.mu.Unlock()
 
-	serveErrors := make(chan error, 3)
-	go func() { serveErrors <- l.grpc.Serve(h2) }()
+	serveErrors := make(chan error, 2)
 	go func() { serveErrors <- l.http.Serve(http1) }()
-	go func() { serveErrors <- l.accept(ctx, tlsListener, h2, http1) }()
+	go func() { serveErrors <- l.accept(ctx, tlsListener, http1) }()
 
 	select {
 	case <-ctx.Done():
@@ -253,7 +256,7 @@ func (l *Listener) tlsConfig() *tls.Config {
 	}
 }
 
-func (l *Listener) accept(ctx context.Context, listener net.Listener, h2, http1 *connListener) error {
+func (l *Listener) accept(ctx context.Context, listener net.Listener, http1 *connListener) error {
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
@@ -262,11 +265,11 @@ func (l *Listener) accept(ctx context.Context, listener net.Listener, h2, http1 
 			}
 			return err
 		}
-		go l.dispatch(ctx, connection, h2, http1)
+		go l.dispatch(ctx, connection, http1)
 	}
 }
 
-func (l *Listener) dispatch(ctx context.Context, connection net.Conn, h2, http1 *connListener) {
+func (l *Listener) dispatch(ctx context.Context, connection net.Conn, http1 *connListener) {
 	tlsConnection, ok := connection.(*tls.Conn)
 	if !ok {
 		_ = connection.Close()
@@ -283,9 +286,11 @@ func (l *Listener) dispatch(ctx context.Context, connection net.Conn, h2, http1 
 
 	switch tlsConnection.ConnectionState().NegotiatedProtocol {
 	case "h2":
-		if !h2.push(tlsConnection) {
-			_ = tlsConnection.Close()
-		}
+		// Serve gRPC and the asset route on the same HTTP/2 connection: Envoy
+		// speaks gRPC, while tools such as curl default to HTTP/2 for both.
+		l.track(tlsConnection)
+		l.h2.ServeConn(tlsConnection, &http2.ServeConnOpts{Handler: http.HandlerFunc(l.serveH2)})
+		l.untrack(tlsConnection)
 	default:
 		// http/1.1, including clients that offer no ALPN at all. gRPC clients
 		// always offer h2, so only h2 is dispatched to the gRPC server.
@@ -293,6 +298,31 @@ func (l *Listener) dispatch(ctx context.Context, connection net.Conn, h2, http1 
 			_ = tlsConnection.Close()
 		}
 	}
+}
+
+// serveH2 routes a gRPC request to the xDS server and everything else to the
+// asset handler, so /wasm/<digest>.wasm is reachable over HTTP/2 too.
+func (l *Listener) serveH2(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+		l.grpc.ServeHTTP(w, r)
+		return
+	}
+	l.handler.ServeHTTP(w, r)
+}
+
+func (l *Listener) track(connection net.Conn) {
+	l.mu.Lock()
+	if l.connections == nil {
+		l.connections = make(map[net.Conn]struct{})
+	}
+	l.connections[connection] = struct{}{}
+	l.mu.Unlock()
+}
+
+func (l *Listener) untrack(connection net.Conn) {
+	l.mu.Lock()
+	delete(l.connections, connection)
+	l.mu.Unlock()
 }
 
 func (l *Listener) shutdown() {
@@ -304,10 +334,15 @@ func (l *Listener) shutdown() {
 	l.bound = false
 	l.ready = false
 	listener := l.listener
+	connections := l.connections
+	l.connections = nil
 	l.mu.Unlock()
 
 	if listener != nil {
 		_ = listener.Close()
+	}
+	for connection := range connections {
+		_ = connection.Close()
 	}
 
 	stopped := make(chan struct{})

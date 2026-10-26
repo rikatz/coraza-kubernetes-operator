@@ -132,6 +132,30 @@ func TestListenerALPNDispatch(t *testing.T) {
 		}
 	})
 
+	t.Run("h2 reaches assets too", func(t *testing.T) {
+		transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: fixture.pool, ServerName: "localhost"}, ForceAttemptHTTP2: true}
+		client := &http.Client{Transport: transport}
+
+		response, err := client.Get("https://" + address + assetPathPrefix + fixture.manifest.SHA256 + assetPathSuffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.ProtoMajor != 2 {
+			t.Fatalf("protocol = %s, want HTTP/2", response.Proto)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("asset status = %d, want 200", response.StatusCode)
+		}
+		if len(body) == 0 {
+			t.Fatal("asset body is empty")
+		}
+	})
+
 	t.Run("http/1.1 reaches assets, not /rules", func(t *testing.T) {
 		transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: fixture.pool, ServerName: "localhost"}, ForceAttemptHTTP2: false}
 		client := &http.Client{
