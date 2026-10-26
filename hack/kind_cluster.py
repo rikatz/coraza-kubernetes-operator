@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import time
 
 from lib import (
     HELM_CHART_DIR, HELM_RELEASE_NAME,
@@ -192,7 +193,17 @@ spec:
   ipAddressPools:
   - kube-services
 """
-    run(f"echo '{manifests}' | kubectl --context {context} apply --server-side -f -")
+    # The MetalLB validating webhook can lag behind the controller rollout on a
+    # fresh cluster; retry until it accepts the pool.
+    for attempt in range(1, 7):
+        if run(
+            f"echo '{manifests}' | kubectl --context {context} apply --server-side -f -",
+            check=False,
+        ).returncode == 0:
+            return
+        print(f"MetalLB webhook not ready (attempt {attempt}), retrying in 5s", file=sys.stderr)
+        time.sleep(5)
+    die("Failed to create the MetalLB IPAddressPool after 6 attempts")
 
 
 # ---------------------------------------------------------------------------

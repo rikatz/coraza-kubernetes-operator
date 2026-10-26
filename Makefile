@@ -209,6 +209,33 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 	if [ "$$want" != "$$got" ]; then echo "wasm.verify: digest mismatch: manifest $$want, $(ASSETS_DIR)/plugin.wasm $$got" >&2; exit 1; fi; \
 	echo "wasm.verify: $$got $(ASSETS_DIR)/plugin.wasm ok"
 
+# Upstream coraza-proxy-wasm built for the demo. The operator payload is the
+# upstream plugin configuration, so the released plugin runs unmodified.
+WASM_PLUGIN_REPO ?= https://github.com/corazawaf/coraza-proxy-wasm
+WASM_PLUGIN_VERSION ?= 0.6.0
+WASM_PLUGIN_DIR ?= $(CURDIR)/.cache/coraza-proxy-wasm
+# TinyGo 0.34 supports Go 1.19-1.23 only; pin the toolchain the plugin builds with.
+WASM_GO_TOOLCHAIN ?= go1.23.12
+TINYGO ?= $(HOME)/bin/tinygocoraza/tinygo/bin/tinygo
+
+.PHONY: wasm.plugin
+wasm.plugin: ## Build the upstream coraza-proxy-wasm module (skipped when WASM_MODULE is set)
+	@set -e; \
+	if [ -n "$(WASM_MODULE)" ]; then \
+		echo "wasm.plugin: reusing $(WASM_MODULE)"; \
+		exit 0; \
+	fi; \
+	if [ ! -d "$(WASM_PLUGIN_DIR)/.git" ]; then \
+		echo "wasm.plugin: cloning $(WASM_PLUGIN_REPO)"; \
+		git clone --quiet "$(WASM_PLUGIN_REPO)" "$(WASM_PLUGIN_DIR)"; \
+	fi; \
+	git -C "$(WASM_PLUGIN_DIR)" fetch --quiet origin; \
+	git -C "$(WASM_PLUGIN_DIR)" checkout --quiet "$(WASM_PLUGIN_VERSION)"; \
+	echo "wasm.plugin: building $(WASM_PLUGIN_VERSION) with $$($(TINYGO) version)"; \
+	cd "$(WASM_PLUGIN_DIR)" && \
+		PATH="$(dir $(TINYGO)):$$PATH" GOTOOLCHAIN="$(WASM_GO_TOOLCHAIN)" go run mage.go build; \
+	echo "wasm.plugin: $(WASM_PLUGIN_DIR)/build/main.wasm"
+
 # ------------------------------------------------------------------------------
 # Deployment
 # ------------------------------------------------------------------------------
@@ -622,8 +649,8 @@ observability.operator.monitoring: ## Enable ServiceMonitor, PrometheusRule, and
 	kubectl --context "$$ctx" -n "$(HELM_RELEASE_NAMESPACE)" wait --for=condition=Available \
 		deployment/"$(HELM_RELEASE_NAME)" --timeout=300s
 
-.PHONY: observability.demo.workload
-observability.demo.workload: ## Apply demo CRs and seed traffic for dashboard metrics
+.PHONY: demo.workload
+demo.workload: ## Apply the demo CRs (config/samples) and wait for acceptance
 	@set -e; \
 	ctx="kind-$(KIND_CLUSTER_NAME)"; \
 	kubectl --context "$$ctx" cluster-info >/dev/null; \
@@ -647,11 +674,55 @@ observability.demo.workload: ## Apply demo CRs and seed traffic for dashboard me
 		ruleset/default-ruleset --timeout=300s 2>/dev/null; then \
 		echo "ERROR: RuleSet default-ruleset not Ready within timeout" >&2; exit 1; \
 	fi
+
+.PHONY: observability.demo.workload
+observability.demo.workload: demo.workload ## Apply demo CRs and seed traffic for dashboard metrics
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEMO_NAMESPACE=$(DEMO_NAMESPACE) \
 		hack/observability/seed-traffic.sh
 
 .PHONY: observability.demo
 observability.demo: observability.prometheus.deploy observability.operator.monitoring observability.demo.workload observability.grafana.url ## Full observability demo on existing KIND cluster
+
+.PHONY: demo
+demo: ## Single command: build the WASM module, create KIND, deploy the operator and the demo rules
+	$(MAKE) wasm.plugin
+	$(MAKE) wasm.bundle WASM_MODULE=$(or $(WASM_MODULE),$(WASM_PLUGIN_DIR)/build/main.wasm)
+	$(MAKE) wasm.verify
+	$(MAKE) cluster.kind
+	@# The chart reuses imagePullPolicy IfNotPresent, so restart the operator to run the image just loaded.
+	kubectl --context kind-$(KIND_CLUSTER_NAME) -n $(HELM_RELEASE_NAMESPACE) rollout restart deployment/$(HELM_RELEASE_NAME)
+	$(MAKE) demo.workload
+	$(MAKE) demo.verify
+	@echo "note: $(ASSETS_DIR)/plugin.wasm now holds the built module; restore the committed fixture with: git checkout $(ASSETS_DIR)"
+
+.PHONY: demo.verify
+demo.verify: ## Assert the demo Gateway passes normal traffic and blocks the demo attack
+	@set -e; \
+	ctx="kind-$(KIND_CLUSTER_NAME)"; \
+	addr=""; \
+	deadline=$$(($$(date +%s) + 300)); \
+	while [ "$$(date +%s)" -lt "$$deadline" ]; do \
+		addr=$$(kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" get gateway coraza-gateway \
+			-o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true); \
+		[ -n "$$addr" ] && break; \
+		sleep 5; \
+	done; \
+	[ -n "$$addr" ] || { echo "ERROR: Gateway coraza-gateway has no address" >&2; exit 1; }; \
+	echo "=== Sending demo traffic to http://$$addr/ ==="; \
+	allowed=""; blocked=""; \
+	deadline=$$(($$(date +%s) + 240)); \
+	while [ "$$(date +%s)" -lt "$$deadline" ]; do \
+		allowed=$$(curl -s -o /dev/null -w '%{http_code}' "http://$$addr/" || true); \
+		blocked=$$(curl -s -o /dev/null -w '%{http_code}' "http://$$addr/?q=evilmonkey" || true); \
+		[ "$$allowed" = "200" ] && [ "$$blocked" = "403" ] && break; \
+		sleep 5; \
+	done; \
+	echo "  allowed  GET /                      -> $$allowed (want 200)"; \
+	echo "  blocked  GET /?q=evilmonkey         -> $$blocked (want 403)"; \
+	[ "$$allowed" = "200" ] && [ "$$blocked" = "403" ] || { \
+		echo "ERROR: the WAF is not enforcing (is the WASM module loaded?)" >&2; exit 1; }; \
+	echo "=== Demo verified: rules from the cluster block the request ==="
+
 
 .PHONY: observability.grafana.port-forward
 observability.grafana.port-forward: ## Port-forward Grafana to http://localhost:3000

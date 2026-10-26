@@ -9,6 +9,32 @@ This tutorial walks you through installing the Coraza Kubernetes Operator on a K
 
 By the end, you will have a working WAF protecting a sample application behind a Kubernetes Gateway.
 
+## Local demo in one command
+
+To see the whole flow on a local [KIND](https://kind.sigs.k8s.io/) cluster — operator,
+Gateway, demo rules, and the real `coraza-proxy-wasm` module — run from the repository root:
+
+```bash
+make demo
+```
+
+It builds the plugin with TinyGo, bundles it into the operator image, creates the cluster
+with Istio (Sail operator), installs the operator, applies `config/samples`, and asserts that
+a normal request passes while the demo attack is blocked:
+
+```
+  allowed  GET /                      -> 200 (want 200)
+  blocked  GET /?q=evilmonkey         -> 403 (want 403)
+```
+
+Requirements: Docker, `kind`, `helm`, `kubectl`, and TinyGo 0.34 (`TINYGO=/path/to/tinygo`
+overrides the default `$HOME/bin/tinygocoraza/tinygo/bin/tinygo`). The first run clones the
+pinned upstream plugin into `.cache/` and downloads the Go 1.23 toolchain TinyGo needs. The
+built module replaces the fixture in `internal/assets`; restore it with
+`git checkout internal/assets`.
+
+The rest of this tutorial assumes you bring your own cluster.
+
 ## Prerequisites
 
 Before you begin, ensure you have:
