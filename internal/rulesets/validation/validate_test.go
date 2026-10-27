@@ -505,6 +505,42 @@ func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 	}
 }
 
+// TestValidateIncludesRejectsNonRuleCrsFiles covers literal @owasp_crs/ paths
+// that name a file which is not a rule file: the .conf.example templates hold
+// no active rules and the .data files are not SecLang. Coraza reports neither,
+// so the Engine would be Ready on a zero-rule WAF that enforces nothing.
+func TestValidateIncludesRejectsNonRuleCrsFiles(t *testing.T) {
+	for _, target := range []string{
+		"@owasp_crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example",
+		"@owasp_crs/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example",
+		"@owasp_crs/restricted-files.data",
+		"@owasp_crs/REQUEST-901-INITIALIZATION.txt",
+	} {
+		t.Run(target, func(t *testing.T) {
+			for _, dataFiles := range []map[string][]byte{nil, {}} {
+				err := ValidateIncludes("Include "+target, dataFiles)
+				require.Error(t, err, "only .conf rule files may be included")
+				assert.Contains(t, err.Error(), "@owasp_crs/*.conf")
+				assert.Contains(t, err.Error(), "@owasp_crs/<file>.conf")
+				assert.NotContains(t, err.Error(), "conf.example", "the error must not echo the tenant's path")
+			}
+		})
+	}
+
+	// A real embedded rule file and the glob stay accepted.
+	assert.NoError(t, ValidateIncludes("Include @owasp_crs/REQUEST-901-INITIALIZATION.conf", nil))
+	assert.NoError(t, ValidateIncludes("Include @owasp_crs/*.conf", nil))
+}
+
+// TestValidateRuleSourceRulesRejectsNonRuleCrsFile covers the RuleSource entry
+// point, which must reject the same literal before the Engine looks Ready.
+func TestValidateRuleSourceRulesRejectsNonRuleCrsFile(t *testing.T) {
+	err := ValidateRuleSourceRules("Include @owasp_crs/restricted-files.data", "crs-rs", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "crs-rs")
+	assert.Contains(t, err.Error(), "@owasp_crs/<file>.conf")
+}
+
 // TestValidateIncludesNestedIncludeResolvesRelativeToIncludingFile covers a
 // nested Include: Coraza joins the target to the including file's directory,
 // so the guard must scan that file, not a same-named file at the root.
