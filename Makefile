@@ -216,6 +216,7 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 # The build runs from an archive of WASM_PLUGIN_VERSION inside a temporary
 # directory: the worktree is read-only for this target (no checkout, no new
 # files), so a local branch and its uncommitted work are left untouched.
+# Commit a plugin change and point WASM_PLUGIN_VERSION at it to build it.
 WASM_PLUGIN_REPO ?= https://github.com/corazawaf/coraza-proxy-wasm
 WASM_PLUGIN_VERSION ?= 31bca96
 WASM_PLUGIN_DIR ?= $(CURDIR)/.cache/coraza-proxy-wasm
