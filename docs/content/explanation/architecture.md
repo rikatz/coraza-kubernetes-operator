@@ -20,10 +20,10 @@ The data flows through these components:
 RuleSource / RuleData
        |
        v
-RuleSetReconciler  --compile and validate-->  RuleSetCache (HTTP server)
+RuleSetReconciler  --compile and validate-->  ECDS resource (per Engine)
                                                     |
                                                     v
-                                          WASM plugin in Envoy (polls cache)
+                                   EnvoyFilter + WASM plugin in Envoy
                                                     |
                                                     v
                                             Traffic filtering
@@ -50,8 +50,8 @@ The Engine controller watches Engine resources, their referenced RuleSets, Gatew
 
 1. Verifies that the referenced RuleSet is in a Ready state.
 2. Discovers Gateway pods that match the Engine's target name (via the GEP-1762 label selector).
-3. Creates or updates an Istio WasmPlugin resource via server-side apply, configuring the WASM plugin to poll the cache server for the specified RuleSet.
-4. Creates a NetworkPolicy to allow Gateway pods to reach the cache server.
+3. Creates or updates an Istio EnvoyFilter that inserts the WASM filter and publishes the accepted RuleSet over ECDS (see [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}})).
+4. Creates a NetworkPolicy to allow Gateway pods to reach the operator's ECDS listener.
 5. Manages a ServiceAccount token for authenticated cache access.
 6. Updates the Engine status with matched Gateways and conditions.
 

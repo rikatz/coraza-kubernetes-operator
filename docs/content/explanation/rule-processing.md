@@ -47,16 +47,14 @@ When unsupported rules are detected:
 
 This behavior can be overridden with the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"`. The issues are still logged and reported in the status, but the RuleSet is cached normally.
 
-## Cache entry lifecycle
+## Rule publication
 
-When rules are successfully compiled and validated, the result is stored in the in-memory RuleSet cache. The cache uses the RuleSet's `namespace/name` as the key.
+When rules are successfully compiled and validated, the operator renders an ECDS snapshot for every Engine bound to the RuleSet and streams it to Envoy. The snapshot version is the content hash, so it changes only when the aggregated rules or the RuleData files change.
 
-Each cache entry is identified by a UUID that changes with each successful compilation. WASM plugins poll the `/rules/{key}/latest` endpoint to check for a new UUID, and fetch the full ruleset from `/rules/{key}` when a change is detected.
-
-Entries are evicted by the garbage collector based on age and total cache size. See [Architecture]({{< relref "/explanation/architecture" >}}) for the cache configuration parameters.
+Envoy applies a new snapshot in place: Gateway pods do not restart and the module bytes are not sent again. See [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}}) for the delivery details.
 
 ## Last-known-good behavior
 
-If a RuleSet update introduces invalid or unsupported rules, the new revision is rejected and the previous valid revision remains in the cache. WASM plugins continue to enforce the last-known-good rules until the issue is resolved and a new valid revision is compiled.
+If a RuleSet update introduces invalid or unsupported rules, the new revision is rejected and the last accepted snapshot stays applied. The plugin continues to enforce the last-known-good rules until the issue is resolved and a new valid revision is accepted and published.
 
 This design ensures that a bad rule update does not leave Gateways unprotected.
