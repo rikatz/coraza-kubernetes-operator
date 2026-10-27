@@ -18,6 +18,7 @@ package assemble_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -291,6 +292,43 @@ func TestAssembleRejectsReservedDataFileNames(t *testing.T) {
 	assert.Contains(t, err.Error(), `"."`)
 	assert.Contains(t, err.Error(), `".."`)
 	assert.Contains(t, err.Error(), "RuleData data")
+}
+
+func TestAssembleRejectsEmbeddedDataFileNames(t *testing.T) {
+	_, err := assemble.Assemble(assemble.Inputs{
+		Sources: []assemble.SourceInput{{Name: "rules", Rules: "SecRuleEngine On"}},
+		Data: []assemble.DataInput{{
+			Name: "legacy-data",
+			Files: map[string]string{
+				"coraza.conf-recommended.conf":        "x",
+				"coraza-demo.conf":                    "x",
+				"ftw-config.conf":                     "x",
+				"crs-setup.conf.example":              "x",
+				"crs/REQUEST-900-INITIALIZATION.conf": "x",
+				"ok.data":                             "x",
+			},
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shadow embedded plugin files")
+	assert.Contains(t, err.Error(), `"coraza.conf-recommended.conf" (RuleData legacy-data)`)
+	assert.Contains(t, err.Error(), `"crs/REQUEST-900-INITIALIZATION.conf" (RuleData legacy-data)`)
+	assert.NotContains(t, err.Error(), "ok.data")
+}
+
+func TestAssembleCapsReportedInvalidDataFileNames(t *testing.T) {
+	files := make(map[string]string, 100)
+	for i := range 100 {
+		files[fmt.Sprintf("../bad-%03d", i)] = "x"
+	}
+	_, err := assemble.Assemble(assemble.Inputs{
+		Sources: []assemble.SourceInput{{Name: "rules", Rules: "SecRuleEngine On"}},
+		Data:    []assemble.DataInput{{Name: "data", Files: files}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "and 95 more")
+	assert.NotContains(t, err.Error(), "../bad-099")
+	assert.Less(t, len(err.Error()), 512)
 }
 
 func TestAssembleRejectsEmptyAndOversizedDataFileNames(t *testing.T) {

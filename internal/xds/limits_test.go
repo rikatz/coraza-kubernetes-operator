@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestLimitsWithDefaultsKeepsPartiallySetLimits checks that a caller that sets
@@ -32,4 +33,19 @@ func TestLimitsWithDefaultsKeepsPartiallySetLimits(t *testing.T) {
 	assert.Equal(t, DefaultStreamMaxLifetime, filled.StreamMaxLifetime)
 
 	assert.Equal(t, DefaultLimits().MaxDataFiles, Limits{}.WithDefaults().MaxDataFiles, "zero limits must default")
+}
+
+// TestLimitsValidateRejectsPluginCapViolations checks that the operator refuses
+// limits the plugin would NACK, which would leave a Ready Engine unpublished.
+func TestLimitsValidateRejectsPluginCapViolations(t *testing.T) {
+	assert.NoError(t, DefaultLimits().Validate())
+	assert.NoError(t, Limits{}.Validate(), "unset limits must not fail validation")
+
+	err := Limits{MaxMessageBytes: DefaultMaxMessageBytes + 1}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "xds-max-message-bytes")
+
+	err = Limits{MaxDecodedDataBytes: pluginMaxDecodedDataBytes + 1}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "xds-max-decoded-data-bytes")
 }

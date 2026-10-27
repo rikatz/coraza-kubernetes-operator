@@ -75,6 +75,18 @@ func TestValidatePMFromFileData(t *testing.T) {
 
 	populatedData := map[string][]byte{"overlap.data": []byte("x")}
 
+	for _, operator := range []string{"@pmFromFile", "@pmf"} {
+		t.Run(operator+" rejects multiple file names", func(t *testing.T) {
+			err := ValidatePMFromFileData(
+				`SecRule ARGS "`+operator+` overlap.data other.data" "id:1,phase:1,pass"`,
+				map[string][]byte{"overlap.data": []byte("x"), "other.data": []byte("y")},
+			)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "single data file name")
+			assert.Contains(t, err.Error(), "overlap.data other.data")
+		})
+	}
+
 	t.Run("CRS comment prose ignored", func(t *testing.T) {
 		err := ValidatePMFromFileData(
 			"# For performance reasons, the @pmFromFile operator is used",

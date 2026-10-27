@@ -22,9 +22,12 @@ import (
 	"strings"
 )
 
-// pmFromFilePattern matches @pmFromFile and its @pmf alias, quoted or not. The
-// alias must be covered too, or @pmf can read any operator-local file.
-var pmFromFilePattern = regexp.MustCompile(`(?i)(@(?:pmFromFile|pmf))\s+("([^"]+)"|(\S+))`)
+// pmFromFilePattern matches a quoted @pmFromFile or @pmf operator and its whole
+// argument. The alias must be covered too, or @pmf can read any operator-local
+// file. Matching the enclosing quotes keeps every token visible: Coraza treats
+// the entire argument as one file name, so "@pmf a.data b.data" fails at build
+// time even when a.data exists.
+var pmFromFilePattern = regexp.MustCompile(`(?i)"[^"\n]*?(@(?:pmFromFile|pmf))\s+([^"\n]*)"`)
 
 // stripSecLangCommentLines removes SecLang comment lines (first non-whitespace
 // character is '#') so @pmFromFile prose in CRS documentation is not scanned.
@@ -52,7 +55,14 @@ func ValidatePMFromFileData(aggregatedRules string, dataFiles map[string][]byte)
 			continue
 		}
 		operator := match[1]
-		basename := strings.Trim(match[2], `"'`)
+		argument := strings.TrimSpace(match[2])
+		if argument == "" {
+			continue
+		}
+		if len(strings.Fields(argument)) > 1 {
+			return fmt.Errorf("%s %s: expected a single data file name, but Coraza treats the whole argument as one file name", operator, argument)
+		}
+		basename := strings.Trim(argument, `"'`)
 		if basename == "" {
 			continue
 		}

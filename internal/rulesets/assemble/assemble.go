@@ -45,6 +45,20 @@ type EmptyRulesPolicy string
 // maxDataFileNameBytes mirrors the plugin's data file name cap.
 const maxDataFileNameBytes = 253
 
+// maxReportedDataFiles bounds the invalid-name enumeration in status messages,
+// so a legacy object with thousands of bad names cannot overflow them.
+const maxReportedDataFiles = 5
+
+// embeddedDataFiles are served by the plugin's embedded filesystem. That tree
+// is merged first, so a RuleData file with one of these names is accepted and
+// then silently ignored.
+var embeddedDataFiles = map[string]struct{}{
+	"coraza.conf-recommended.conf": {},
+	"coraza-demo.conf":             {},
+	"ftw-config.conf":              {},
+	"crs-setup.conf.example":       {},
+}
+
 const (
 	// EmptyRulesPolicyReject rejects empty assembled rules. It is the default.
 	EmptyRulesPolicyReject EmptyRulesPolicy = "Reject"
@@ -155,23 +169,46 @@ func validateReferences(in Inputs) error {
 	// and rejects names longer than 253 bytes, failing the whole configuration.
 	// CEL only guards writes, so objects created before those rules existed
 	// must be caught here.
-	var invalid []string
+	var invalid, shadowed []string
 	for _, data := range in.Data {
 		for name := range data.Files {
-			if name == "." || len(name) > maxDataFileNameBytes || !fs.ValidPath(name) {
+			switch {
+			case name == "." || len(name) > maxDataFileNameBytes || !fs.ValidPath(name):
 				invalid = append(invalid, fmt.Sprintf("%q (RuleData %s)", name, data.Name))
+			case shadowsEmbeddedFile(name):
+				shadowed = append(shadowed, fmt.Sprintf("%q (RuleData %s)", name, data.Name))
 			}
 		}
 	}
 	if len(invalid) > 0 {
 		sort.Strings(invalid)
-		msgs = append(msgs, fmt.Sprintf("spec.data contains invalid data file name(s): %s", strings.Join(invalid, ", ")))
+		msgs = append(msgs, fmt.Sprintf("spec.data contains invalid data file name(s): %s", summarizeDataFiles(invalid)))
+	}
+	if len(shadowed) > 0 {
+		sort.Strings(shadowed)
+		msgs = append(msgs, fmt.Sprintf("spec.data contains data file name(s) that shadow embedded plugin files: %s", summarizeDataFiles(shadowed)))
 	}
 
 	if len(msgs) > 0 {
 		return errors.New(strings.Join(msgs, "; "))
 	}
 	return nil
+}
+
+// shadowsEmbeddedFile reports whether name resolves to an embedded plugin file
+// before the merged RuleData filesystem is consulted.
+func shadowsEmbeddedFile(name string) bool {
+	if _, ok := embeddedDataFiles[name]; ok {
+		return true
+	}
+	return name == "crs" || strings.HasPrefix(name, "crs/")
+}
+
+func summarizeDataFiles(entries []string) string {
+	if len(entries) <= maxReportedDataFiles {
+		return strings.Join(entries, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(entries[:maxReportedDataFiles], ", "), len(entries)-maxReportedDataFiles)
 }
 
 func duplicateNames[T any](items []T, name func(T) string) []string {

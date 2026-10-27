@@ -23,6 +23,7 @@ package xds
 
 import (
 	"flag"
+	"fmt"
 	"time"
 )
 
@@ -67,6 +68,13 @@ const (
 	// DefaultTokenReviewRetries is the number of retries after the first
 	// failed TokenReview call.
 	DefaultTokenReviewRetries = 2
+)
+
+// The plugin NACKs a configuration above its compile-time caps, so an operator
+// configured past them would leave a Ready Engine without a published WAF.
+const (
+	pluginMaxMessageBytes     = 16 << 20
+	pluginMaxDecodedDataBytes = 12 << 20
 )
 
 // Limits is the serving-plane resource envelope. Flag defaults live in
@@ -147,6 +155,18 @@ func (l Limits) WithDefaults() Limits {
 		l.TokenReviewRetries = 0
 	}
 	return l
+}
+
+// Validate rejects limits the plugin cannot honour. Zero values pass and are
+// filled by WithDefaults.
+func (l Limits) Validate() error {
+	if l.MaxMessageBytes > pluginMaxMessageBytes {
+		return fmt.Errorf("xds-max-message-bytes %d exceeds the plugin payload cap of %d bytes", l.MaxMessageBytes, pluginMaxMessageBytes)
+	}
+	if l.MaxDecodedDataBytes > pluginMaxDecodedDataBytes {
+		return fmt.Errorf("xds-max-decoded-data-bytes %d exceeds the plugin decoded RuleData cap of %d bytes", l.MaxDecodedDataBytes, pluginMaxDecodedDataBytes)
+	}
+	return nil
 }
 
 // AddFlags registers the serving-plane flags on fs.
