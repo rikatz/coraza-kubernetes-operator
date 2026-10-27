@@ -94,6 +94,24 @@ func TestExtractMissingFileBasename(t *testing.T) {
 			wantBase: "",
 			wantOK:   false,
 		},
+		{
+			name:     "Coraza %s-wrapped read error",
+			err:      errors.New("invalid WAF config from string: failed to readfile: open blocklist.conf: file does not exist"),
+			wantBase: "blocklist.conf",
+			wantOK:   true,
+		},
+		{
+			name:     "Coraza %s-wrapped read error with an absolute path",
+			err:      errors.New("invalid WAF config from string: failed to readfile: open /home/operator/waf/nope.data: no such file or directory"),
+			wantBase: "nope.data",
+			wantOK:   true,
+		},
+		{
+			name:     "Coraza %s-wrapped parse error is not a missing file",
+			err:      errors.New(`failed to parse string: failed to compile the directive "secrule": invalid action`),
+			wantBase: "",
+			wantOK:   false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -129,6 +147,18 @@ func TestSanitizeErrorMessage(t *testing.T) {
 			name:          "ErrNotExist without PathError gets generic redaction",
 			err:           fmt.Errorf("something: %w", fs.ErrNotExist),
 			wantSubstring: "referenced file does not exist (path redacted)",
+			wantNoAbsPath: true,
+		},
+		{
+			name:          "Coraza %s-wrapped read error sanitized to basename",
+			err:           errors.New("invalid WAF config from string: failed to readfile: open /home/operator/waf/validation/nope.data: file does not exist"),
+			wantSubstring: "open nope.data: data does not exist",
+			wantNoAbsPath: true,
+		},
+		{
+			name:          "Coraza %s-wrapped no such file error sanitized to basename",
+			err:           errors.New("failed to parse string: failed to readfile: open blocklist.conf: no such file or directory"),
+			wantSubstring: "open blocklist.conf: data does not exist",
 			wantNoAbsPath: true,
 		},
 		{
@@ -229,6 +259,24 @@ func TestShouldSkipMissingFileError(t *testing.T) {
 			secretData: map[string][]byte{},
 			want:       true,
 		},
+		{
+			name:       "Coraza %s-wrapped missing include is deferred with nil dataFiles",
+			err:        errors.New("invalid WAF config from string: failed to readfile: open blocklist.conf: file does not exist"),
+			secretData: nil,
+			want:       true,
+		},
+		{
+			name:       "Coraza %s-wrapped missing include found in dataFiles",
+			err:        errors.New("invalid WAF config from string: failed to readfile: open blocklist.conf: file does not exist"),
+			secretData: map[string][]byte{"blocklist.conf": []byte("x")},
+			want:       true,
+		},
+		{
+			name:       "Coraza %s-wrapped missing include absent from non-nil dataFiles",
+			err:        errors.New("invalid WAF config from string: failed to readfile: open nofile.conf: file does not exist"),
+			secretData: map[string][]byte{"blocklist.conf": []byte("x")},
+			want:       false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -285,6 +333,45 @@ func TestValidateRuleSourceRules(t *testing.T) {
 	})
 }
 
+// TestValidateRuleSourceRulesDefersIncludedRuleData covers `Include <RuleData
+// name>` on the per-source path: the file is resolved from the RuleSet's merged
+// RuleData, so a missing file is deferred to aggregate validation instead of
+// degrading the RuleSource. Coraza wraps the read error with %s, which loses the
+// *fs.PathError the skip used to require.
+func TestValidateRuleSourceRulesDefersIncludedRuleData(t *testing.T) {
+	rules := "Include blocklist.conf"
+
+	assert.NoError(t, ValidateRuleSourceRules(rules, "include-rs", nil),
+		"a bare RuleData include must be deferred, not rejected")
+
+	dataFiles := map[string][]byte{
+		"blocklist.conf": []byte(`SecRule ARGS "@streq evilmonkey" "id:1,phase:1,deny"`),
+	}
+	assert.NoError(t, ValidateRuleSourceRules(rules, "include-rs", dataFiles))
+
+	err := ValidateRuleSourceRules("Include nope.conf", "include-rs", map[string][]byte{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "open nope.conf: data does not exist")
+	assert.NotContains(t, err.Error(), "/", "the redacted message must not leak a filesystem path")
+}
+
+// TestBuildWAFConfigStubsAliasesInIncludedRuleData covers an Include of a
+// RuleData file that itself includes a runtime alias or reads embedded CRS data:
+// Coraza parses the included file as rule text, so the stubs must be collected
+// from it too, not only from the top-level text.
+func TestBuildWAFConfigStubsAliasesInIncludedRuleData(t *testing.T) {
+	dataFiles := map[string][]byte{
+		"extra.conf": []byte("Include @crs-setup-conf\n" +
+			`SecRule ARGS "@pmf crs/restricted-files.data" "id:1,phase:1,pass"` + "\n"),
+	}
+	rules := "SecRuleEngine On\nInclude extra.conf"
+
+	require.NoError(t, ValidateIncludes(rules, dataFiles))
+	require.NoError(t, ValidateRuleSourceRules(rules, "include-rs", dataFiles))
+	_, err := coraza.NewWAF(BuildWAFConfig(rules, dataFiles))
+	require.NoError(t, err)
+}
+
 // TestValidateRuleSourceRulesCannotReadHostFiles covers the tenant-text escape
 // where Coraza's default io.OSFS read an operator file and its content leaked
 // through the compilation error into tenant-readable status.
@@ -334,9 +421,15 @@ func TestValidateRuleSourceRulesCannotReadHostFiles(t *testing.T) {
 			"SecRuleEngine On\nSecAuditEngine On\nSecAuditLog "+auditPath+"\nSecAuditLogType Serial",
 			"audit-rs", nil,
 		)
-		require.NoError(t, err)
+		require.Error(t, err, "a file audit log target cannot be delivered to the plugin")
+		assert.NotContains(t, err.Error(), auditPath, "the error must not echo the tenant path")
 		_, statErr := os.Stat(auditPath)
 		assert.True(t, os.IsNotExist(statErr), "the validation WAF must not create the audit log on the host")
+
+		require.NoError(t, ValidateRuleSourceRules(
+			"SecRuleEngine On\nSecAuditEngine On\nSecAuditLog /dev/stdout\nSecAuditLogType Serial",
+			"audit-rs", nil,
+		))
 	})
 }
 
@@ -365,13 +458,14 @@ func TestValidateIncludes(t *testing.T) {
 		"Include @ftw-conf",
 		"Include @crs-setup-conf",
 		"Include @owasp_crs/*.conf",
-		"Include @owasp_crs/REQUEST-*.conf",
 		"Include @owasp_crs/REQUEST-901-INITIALIZATION.conf",
 		"Include some.data",
 		"Include ./some.data",
 		"SecRuleEngine On\nSecRule ARGS \"@rx x\" \"id:1,phase:1,pass\"",
 		"SecDebugLogLevel 9",
-		"SecAuditLog /tmp/audit.log\nSecAuditLogType Serial",
+		"SecAuditLog /dev/stdout\nSecAuditLogType Serial",
+		"SecAuditLog /dev/stderr\nSecAuditLogType Serial",
+		"SecAuditLog \"/dev/stdout\"\nSecAuditLogType Serial",
 	} {
 		t.Run(rules, func(t *testing.T) {
 			assert.NoError(t, ValidateIncludes(rules, nil))
@@ -380,24 +474,30 @@ func TestValidateIncludes(t *testing.T) {
 }
 
 // TestValidateIncludesRejectsUnresolvableGlobs covers globs the plugin cannot
-// expand: only @owasp_crs/ patterns ending in .conf are resolvable, and a
-// root-level glob matches nothing in either filesystem.
+// guarantee to match. Only the exact @owasp_crs/*.conf is accepted: Coraza logs
+// an empty glob result instead of failing, so any narrower pattern that matches
+// nothing would compile a zero-rule WAF. A root-level glob matches nothing in
+// either filesystem.
 func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 	for _, target := range []string{
 		"@owasp_crs/*",
 		"@owasp_crs/*.data",
 		"@owasp_crs/REQUEST-*.data",
+		"@owasp_crs/REQUEST-*.conf",
+		"@owasp_crs/NOSUCH-*.conf",
+		"@owasp_crs/*[.conf",
 		"@owasp_crs/*/*.conf",
 		"@owasp_crs/*/REQUEST-901-INITIALIZATION.conf",
 		"@recommended-conf*",
 		"*.conf",
+		"*.data",
 		"rules/*.conf",
 		"./*.conf",
 	} {
 		t.Run(target, func(t *testing.T) {
 			err := ValidateIncludes("Include "+target, nil)
-			require.Error(t, err, "the plugin cannot expand this glob")
-			assert.Contains(t, err.Error(), "@owasp_crs/<path>", "the error must name the allowed aliases")
+			require.Error(t, err, "the plugin cannot guarantee this glob matches")
+			assert.Contains(t, err.Error(), "@owasp_crs/<file>", "the error must name the allowed aliases")
 		})
 	}
 }
@@ -419,6 +519,19 @@ func TestValidateIncludesNestedIncludeResolvesRelativeToIncludingFile(t *testing
 	err := ValidateIncludes("Include sub/a.data", dataFiles)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "included RuleData file sub/b.data")
+
+	// RuleData names cannot contain "/", so a same-directory nested include is
+	// the only shape that reaches the operator.
+	sameDir := map[string][]byte{
+		"outer.data": []byte("Include inner.data"),
+		"inner.data": []byte("SecDebugLog /dev/stdout"),
+	}
+	err = ValidateIncludes("Include outer.data", sameDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "included RuleData file inner.data")
+
+	sameDir["inner.data"] = []byte("SecRuleEngine On")
+	require.NoError(t, ValidateIncludes("Include outer.data", sameDir))
 }
 
 // TestValidateIncludesRejectsUnknownAliases covers the alias allowlist: an
@@ -440,7 +553,7 @@ func TestValidateIncludesRejectsUnknownAliases(t *testing.T) {
 		t.Run(target, func(t *testing.T) {
 			err := ValidateIncludes("Include "+target, nil)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "@owasp_crs/<path>", "the error must name the allowed aliases")
+			assert.Contains(t, err.Error(), "@owasp_crs/<file>", "the error must name the allowed aliases")
 			assert.NotContains(t, err.Error(), "notanalias")
 		})
 	}
@@ -451,7 +564,7 @@ func TestValidateIncludesRejectsUnknownAliases(t *testing.T) {
 		t.Run(target, func(t *testing.T) {
 			err := ValidateIncludes("Include "+target, nil)
 			require.Error(t, err, "the bare CRS directory cannot be included")
-			assert.Contains(t, err.Error(), "@owasp_crs/<path>")
+			assert.Contains(t, err.Error(), "@owasp_crs/<file>")
 		})
 	}
 
@@ -492,6 +605,37 @@ func TestValidateIncludesRejectsHostWritingDirectives(t *testing.T) {
 	assert.NoError(t, ValidateIncludes("SecUploadKeepFiles \"Off\"", nil))
 }
 
+// TestValidateIncludesRejectsAuditLogFileTargets covers the delivered audit log
+// path: the validation trailer pins it to /dev/null, but the plugin builds the
+// tenant text, so only the stream targets its serial writer can open survive.
+func TestValidateIncludesRejectsAuditLogFileTargets(t *testing.T) {
+	const marker = "tenant-audit-marker-9ad2"
+	for _, rules := range []string{
+		"SecAuditLog /var/log/" + marker + ".log",
+		"SecAuditLog \"/var/log/" + marker + ".log\"",
+		"SecAuditLog /dev/null",
+		"SecAuditLog",
+		"SecAuditLog ",
+		"SecAuditLog  /dev/stdout",
+		"secauditlog audit-" + marker + ".log",
+		"SecAuditLogType Serial\nSecAuditLog /var/log/" + marker + ".log",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			err := ValidateIncludes(rules, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "SecAuditLog is only allowed with /dev/stdout or /dev/stderr")
+			assert.NotContains(t, err.Error(), marker, "the error must be content free")
+			assert.NotContains(t, err.Error(), "/var/")
+		})
+	}
+
+	// SecAuditLogType stays allowed on its own and with a stream target.
+	assert.NoError(t, ValidateIncludes("SecAuditLogType Serial", nil))
+	assert.NoError(t, ValidateIncludes("SecAuditLog /dev/stdout", nil))
+	assert.NoError(t, ValidateIncludes("SecAuditLog /dev/stderr\nSecAuditLogType Serial", nil))
+	assert.NoError(t, ValidateIncludes("SecAuditLog \"/dev/stderr\"", nil))
+}
+
 func TestValidateRuleSourceRulesAcceptsRuntimeAliases(t *testing.T) {
 	for _, include := range []string{
 		"Include @recommended-conf",
@@ -513,7 +657,7 @@ func TestValidateRuleSourceRulesAcceptsRuntimeAliases(t *testing.T) {
 			err := ValidateRuleSourceRules(include, "alias-rs", nil)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "alias-rs")
-			assert.Contains(t, err.Error(), "@owasp_crs/<path>")
+			assert.Contains(t, err.Error(), "@owasp_crs/<file>")
 		})
 	}
 }
@@ -525,7 +669,7 @@ func TestValidateRuleSourceRulesRejectsUnknownAlias(t *testing.T) {
 	err := ValidateRuleSourceRules("Include @notanalias", "alias-rs", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "alias-rs")
-	assert.Contains(t, err.Error(), "@owasp_crs/<path>")
+	assert.Contains(t, err.Error(), "@owasp_crs/<file>")
 	assert.NotContains(t, err.Error(), "notanalias")
 }
 
@@ -540,7 +684,7 @@ func TestValidateRuleSourceRulesScansPatchOnlyFragments(t *testing.T) {
 	err := ValidateRuleSourceRules(rules, "patch-rs", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "patch-rs")
-	assert.Contains(t, err.Error(), "@owasp_crs/<path>")
+	assert.Contains(t, err.Error(), "@owasp_crs/<file>")
 }
 
 // TestValidateRuleSourceRulesRejectsDebugLog covers the RuleSource entry point:

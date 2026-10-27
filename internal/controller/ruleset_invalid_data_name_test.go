@@ -117,7 +117,9 @@ func TestReservedDataFileNameBlocksAcceptance(t *testing.T) {
 
 // TestHostWritingDirectiveInIncludedRuleDataBlocksAcceptance covers an Include
 // of a RuleData file whose content is parsed as rule text: the aggregate
-// validation must reject a host-writing directive hidden there.
+// validation must reject a host-writing directive hidden there. The RuleSource
+// is validated for real: its Include of a RuleData name is deferred, not
+// rejected.
 func TestHostWritingDirectiveInIncludedRuleDataBlocksAcceptance(t *testing.T) {
 	ctx := context.Background()
 
@@ -126,13 +128,6 @@ func TestHostWritingDirectiveInIncludedRuleDataBlocksAcceptance(t *testing.T) {
 		"bad.data": "SecDebugLog /dev/shm/" + marker + ".log\n",
 	})
 	source := utils.NewTestRuleSource("debug-source", testNamespace, "Include bad.data")
-	apimeta.SetStatusCondition(&source.Status.Conditions, metav1.Condition{
-		Type:               conditionReady,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: source.Generation,
-		Reason:             ruleSourceReadyReasonValidated,
-		LastTransitionTime: metav1.Now(),
-	})
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "debug-ruleset",
 		Namespace: testNamespace,
@@ -142,9 +137,11 @@ func TestHostWritingDirectiveInIncludedRuleDataBlocksAcceptance(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&wafv1alpha1.RuleSet{}, &wafv1alpha1.RuleData{}, &wafv1alpha1.Engine{}).
+		WithStatusSubresource(&wafv1alpha1.RuleSet{}, &wafv1alpha1.RuleData{}, &wafv1alpha1.Engine{}, &wafv1alpha1.RuleSource{}).
 		WithObjects(ruleset, source, data).
 		Build()
+
+	reconcileTestRuleSource(t, ctx, c, source)
 
 	metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)
@@ -182,7 +179,7 @@ func TestLegacyAcceptedContentIsRevalidatedOnUpgrade(t *testing.T) {
 		want  string
 	}{
 		{name: "host writing directive", rules: "SecRuleEngine On\nSecDebugLog /dev/stdout", want: "SecDebugLog"},
-		{name: "unresolvable alias", rules: "SecRuleEngine On\nInclude @notanalias", want: "@owasp_crs/<path>"},
+		{name: "unresolvable alias", rules: "SecRuleEngine On\nInclude @notanalias", want: "@owasp_crs/<file>"},
 	}
 
 	for _, tc := range tests {

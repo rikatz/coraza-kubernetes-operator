@@ -71,15 +71,23 @@ Rule text may reference only what both sides can resolve. The operator validates
 references before an Engine accepts the configuration:
 
 - `Include` targets: `@recommended-conf`, `@demo-conf`, `@ftw-conf`,
-  `@crs-setup-conf`, `@owasp_crs/<path>` (for example `@owasp_crs/*.conf`), and bare
-  RuleData file names. The `<path>` must have a non-empty first segment, no empty
-  segments, and no `.` or `..` segments. A glob is allowed only in the last segment,
-  and that segment must end in `.conf` (`@owasp_crs/*.conf`,
-  `@owasp_crs/REQUEST-*.conf`): the plugin expands the pattern against the embedded CRS
-  tree, so `@owasp_crs/*` or `@owasp_crs/*.data` would match entries it cannot parse and
-  NACK every push. The bare `@owasp_crs` and the trailing-slash, `.` or double-slash
-  variants name the embedded directory rather than a file and are rejected, as is any
-  other `@`-prefixed target: the plugin cannot resolve them and would NACK every push.
+  `@crs-setup-conf`, `@owasp_crs/*.conf`, a literal `@owasp_crs/<file>`, and bare
+  RuleData file names. The `<file>` must have a non-empty first segment, no empty
+  segments, and no `.` or `..` segments. A glob is accepted only as the exact
+  `@owasp_crs/*.conf`: the plugin expands it against the embedded CRS tree, and
+  Coraza only logs an empty glob result instead of failing, so a narrower pattern
+  (`@owasp_crs/REQUEST-*.conf`, `@owasp_crs/NOSUCH-*.conf`), a broader one
+  (`@owasp_crs/*`), one matching non-rule files (`@owasp_crs/*.data`), or a glob in
+  an intermediate segment would compile a zero-rule WAF and still report `Ready`.
+  The bare `@owasp_crs`, the trailing-slash, `.` and double-slash variants name the
+  embedded directory rather than a file and are rejected, as is any other
+  `@`-prefixed target: the plugin cannot resolve them.
+- A bare RuleData file name in `Include` is resolved from the RuleSet's merged
+  RuleData, so the operator checks it at two points. Per-RuleSource validation has no
+  data files and defers the name: the RuleSource is `Validated`, not degraded. The
+  RuleSet's aggregate compilation supplies the merged files and rejects the RuleSet
+  when the name is absent (`Degraded`, `InvalidRuleSet`). An `Include` of a RuleData
+  file scans the included file's content as rule text too, recursively.
 - `@pmFromFile` / `@pmf` targets: a RuleData file name, or `crs/...` for the CRS data
   files the plugin serves from its embedded tree. A leading `./` is ignored, as Coraza
   path-cleans the argument.
@@ -87,19 +95,23 @@ references before an Engine accepts the configuration:
   `SecDebugLog`, `SecUploadDir`, and `SecUploadKeepFiles` with any value other than
   `Off`. This covers rule text and any RuleData file the rules `Include` (an included
   file is parsed as rule text). `@pmFromFile` data is not SecLang and is not scanned.
-  `SecDebugLogLevel`, `SecAuditLog`, and `SecAuditLogType` are accepted; the plugin
-  routes debug output to its proxy logs and the operator's validation WAF pins the
-  audit log to `/dev/null`.
+  `SecDebugLogLevel` and `SecAuditLogType` are accepted. `SecAuditLog` is accepted only
+  with `/dev/stdout` or `/dev/stderr`: the plugin's serial audit writer writes to those
+  streams and opens every other target with `os.OpenFile`, which the WASM sandbox
+  cannot do, so any other target would NACK the push while the Engine reports `Ready`.
+  The operator's validation WAF always pins its own audit log to `/dev/null`.
 
 Known trades of this contract:
 
-- The operator cannot verify the embedded file list. A wrong file under `@owasp_crs/`
-  (for example `@owasp_crs/typo.conf`) or under `crs/` passes validation, the Engine
-  reports `Ready`, and the plugin NACKs the push; the stream stays fail-closed and the
-  operator logs the retry budget being exhausted. Use the `@owasp_crs/*.conf` glob to
-  refer to the whole CRS tree, which cannot name a missing file.
+- The operator cannot verify the embedded file list. A wrong literal file under
+  `@owasp_crs/` (for example `@owasp_crs/typo.conf`) or under `crs/` passes
+  validation, the Engine reports `Ready`, and the plugin NACKs the push; the stream
+  stays fail-closed and the operator logs the retry budget being exhausted. Use the
+  `@owasp_crs/*.conf` glob to refer to the whole CRS rule tree, which is guaranteed to
+  match all 27 embedded rule files.
 - `Include` targets are matched by form, not by existence: a bare RuleData name is
-  accepted here and checked by aggregate RuleSet validation against the merged files.
+  accepted per RuleSource and checked by aggregate RuleSet validation against the
+  merged files.
 
 ## Cold start
 

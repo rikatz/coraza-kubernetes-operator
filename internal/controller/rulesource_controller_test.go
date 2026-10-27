@@ -73,6 +73,36 @@ func TestRuleSourceReconciler_InvalidRules(t *testing.T) {
 	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "invalid"))
 }
 
+func TestRuleSourceReconciler_AuditLogTargets(t *testing.T) {
+	ctx := context.Background()
+
+	valid := utils.NewTestRuleSource("rs-ctrl-audit-stream", testNamespace,
+		"SecRuleEngine On\nSecAuditEngine On\nSecAuditLog /dev/stdout\nSecAuditLogType Serial")
+	require.NoError(t, k8sClient.Create(ctx, valid))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, valid) })
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}
+	_, err := rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: valid.Name, Namespace: valid.Namespace}})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: valid.Name, Namespace: valid.Namespace}, valid))
+	ready := apimeta.FindStatusCondition(valid.Status.Conditions, conditionReady)
+	require.NotNil(t, ready)
+	assert.Equal(t, ruleSourceReadyReasonValidated, ready.Reason)
+
+	invalid := utils.NewTestRuleSource("rs-ctrl-audit-file", testNamespace,
+		"SecRuleEngine On\nSecAuditEngine On\nSecAuditLog /var/log/audit.log")
+	require.NoError(t, k8sClient.Create(ctx, invalid))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, invalid) })
+
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: invalid.Name, Namespace: invalid.Namespace}})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: invalid.Name, Namespace: invalid.Namespace}, invalid))
+	deg := apimeta.FindStatusCondition(invalid.Status.Conditions, conditionDegraded)
+	require.NotNil(t, deg)
+	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
+	assert.Contains(t, deg.Message, "SecAuditLog is only allowed with /dev/stdout or /dev/stderr")
+}
+
 func TestRuleSourceReconciler_PatchOnlyFragment(t *testing.T) {
 	ctx := context.Background()
 	rs := utils.NewTestRuleSource("rs-ctrl-patch-only", testNamespace,
@@ -153,7 +183,7 @@ func TestRuleSourceReconciler_PatchOnlyFragmentWithBadInclude(t *testing.T) {
 	require.NotNil(t, deg)
 	assert.Equal(t, metav1.ConditionTrue, deg.Status)
 	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
-	assert.Contains(t, deg.Message, "@owasp_crs/<path>")
+	assert.Contains(t, deg.Message, "@owasp_crs/<file>")
 	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "invalid"))
 	assert.Equal(t, float64(0), gatherValidationCounter(t, reg, "skipped"))
 }

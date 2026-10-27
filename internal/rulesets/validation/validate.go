@@ -41,19 +41,69 @@ const validationTrailer = "\nSecAuditLogType Serial\nSecAuditLog /dev/null"
 // always in-memory. Coraza falls back to io.OSFS when no root is set, so tenant
 // rule text could otherwise read operator files (an Include of the ServiceAccount
 // token leaks it through the compilation error into tenant-readable status).
-// Runtime include aliases and embedded CRS data files are stubbed so Coraza
-// does not reject what the plugin resolves from its embedded filesystem.
+// Runtime include aliases and embedded CRS data files are stubbed, in the rule
+// text and in every RuleData file it Includes, so Coraza does not reject what
+// the plugin resolves from its embedded filesystem.
 func BuildWAFConfig(rules string, dataFiles map[string][]byte) coraza.WAFConfig {
 	mfs := memfs.NewMemFS()
 	for name, data := range dataFiles {
 		mfs.WriteFile(name, data)
 	}
-	for _, target := range append(runtimeIncludeTargets(rules), embeddedDataTargets(rules)...) {
+	for _, target := range validationStubTargets(rules, dataFiles) {
 		if _, ok := dataFiles[target]; !ok {
 			mfs.WriteFile(target, nil)
 		}
 	}
 	return coraza.NewWAFConfig().WithDirectives(rules + validationTrailer).WithRootFS(mfs)
+}
+
+// validationStubTargets returns the runtime include aliases and embedded
+// @pmFromFile data files the plugin resolves from its own filesystem. Coraza
+// parses an included RuleData file as rule text, so the aliases and @pmf
+// targets it contains must be stubbed too: follow the include chain exactly as
+// Coraza does, relative to the including file's directory.
+func validationStubTargets(rules string, dataFiles map[string][]byte) []string {
+	var targets []string
+	queue := []struct{ name, text string }{{text: rules}}
+	seen := make(map[string]struct{}, len(dataFiles))
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		targets = append(targets, runtimeIncludeTargets(current.text)...)
+		targets = append(targets, embeddedDataTargets(current.text)...)
+		for _, name := range ruleDataIncludeNames(current.text) {
+			name = path.Join(path.Dir(current.name), name)
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			data, ok := dataFiles[name]
+			if !ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			queue = append(queue, struct{ name, text string }{name: name, text: string(data)})
+		}
+	}
+	return targets
+}
+
+// ruleDataIncludeNames returns the RuleData file names a rule text Includes.
+// Aliases, globs and filesystem paths are omitted: aliases and globs are
+// stubbed as targets, and filesystem paths are rejected before compilation.
+func ruleDataIncludeNames(rules string) []string {
+	var names []string
+	for line := range strings.SplitSeq(joinActiveRuleLines(rules), "\n") {
+		match := includePattern.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		target := strings.Trim(strings.TrimSpace(match[1]), `"'`)
+		if isOSPath(target) || strings.HasPrefix(target, "@") || isGlob(target) {
+			continue
+		}
+		names = append(names, path.Clean(target))
+	}
+	return names
 }
 
 // runtimeIncludeTargets returns the non-glob Include targets resolved by the
@@ -89,18 +139,27 @@ func embeddedDataTargets(rules string) []string {
 	return targets
 }
 
-// ExtractMissingFilePath returns the path from a missing-file error by walking
-// the error chain for *fs.PathError with fs.ErrNotExist.
+// missingFileWrappedPattern matches a missing-file read error whose error chain
+// is lost because Coraza wraps it with %s instead of %w ("failed to readfile:
+// open <path>: file does not exist").
+var missingFileWrappedPattern = regexp.MustCompile(`failed to readfile: open (.+?): (?:file does not exist|no such file or directory)`)
+
+// ExtractMissingFilePath returns the path from a missing-file error. It walks
+// the error chain for *fs.PathError with fs.ErrNotExist and falls back to the
+// text Coraza produces when it wraps the read error with %s.
 func ExtractMissingFilePath(err error) (string, bool) {
 	var pathErr *fs.PathError
 	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrNotExist) {
 		return pathErr.Path, true
 	}
+	if match := missingFileWrappedPattern.FindStringSubmatch(err.Error()); match != nil {
+		return match[1], true
+	}
 	return "", false
 }
 
 // ExtractMissingFileBasename extracts the base filename from a missing-file
-// error by walking the error chain for *fs.PathError with fs.ErrNotExist.
+// error. See ExtractMissingFilePath.
 func ExtractMissingFileBasename(err error) (string, bool) {
 	path, ok := ExtractMissingFilePath(err)
 	if !ok {
@@ -117,11 +176,14 @@ func ExtractMissingFileBasename(err error) (string, bool) {
 // the embedded CRS tree, so the path must name a file inside it: the bare
 // @owasp_crs and a path with an empty, "." or ".." segment name the directory
 // itself, which cannot be included. A glob only works where the embedded tree
-// holds the files: the plugin expands it with the CRS directory's ReadDir, so
-// it must sit in the final segment and name .conf files (for example
-// @owasp_crs/*.conf). Any other pattern matches nothing or parses non-rule
-// files, which makes the plugin NACK every push. A wrong file name there is a
-// documented delivery risk: the operator cannot verify the embedded file list.
+// holds the files and every match is valid rule text. The plugin expands it
+// with the CRS directory's ReadDir, and Coraza only logs an empty glob result,
+// so a pattern that matches nothing silently yields a zero-rule WAF. The exact
+// @owasp_crs/*.conf is the only glob the embedded tree guarantees to match
+// (every embedded CRS rule file ends in .conf): any other pattern, such as
+// @owasp_crs/REQUEST-*.conf or @owasp_crs/*.data, is rejected. A wrong literal
+// file name there is a documented delivery risk: the operator cannot verify the
+// embedded file list.
 func isRuntimeResolvedPath(path string) bool {
 	switch path {
 	case "@recommended-conf", "@demo-conf", "@ftw-conf", "@crs-setup-conf":
@@ -143,7 +205,8 @@ func isRuntimeResolvedPath(path string) bool {
 		}
 	}
 	last := elems[len(elems)-1]
-	return !isGlob(last) || strings.HasSuffix(last, ".conf")
+	// Only the exact all-conf glob is guaranteed to match embedded rule files.
+	return last == "*.conf" || !isGlob(last)
 }
 
 // isGlob reports whether elem contains a glob metacharacter. Coraza expands
@@ -189,9 +252,9 @@ func SanitizeErrorMessage(err error) error {
 // always skipped: the plugin's merged filesystem resolves it. Otherwise, when
 // dataFiles is nil (RuleSource reconciler path, no RuleSet-scoped RuleData
 // merged), any missing-file error is skipped so aggregate RuleSet validation
-// remains authoritative for @pmFromFile. When dataFiles is non-nil, the error
-// is skipped only if basename exists in the map (use an empty non-nil map to
-// require resolution without providing files).
+// remains authoritative for Include targets and @pmFromFile. When dataFiles is
+// non-nil, the error is skipped only if basename exists in the map (use an
+// empty non-nil map to require resolution without providing files).
 func ShouldSkipMissingFileError(err error, dataFiles map[string][]byte) bool {
 	path, ok := ExtractMissingFilePath(err)
 	if !ok {
@@ -215,8 +278,24 @@ var includePattern = regexp.MustCompile(`(?i)^include[ \t]+(.+)$`)
 // host file while compiling a WAF, regardless of the in-memory root filesystem.
 // SecDebugLogLevel is deliberately not matched: it only sets a verbosity and
 // opens nothing. SecAuditLog and SecAuditLogType are allowed because
-// validationTrailer overrides them to /dev/null.
+// validationTrailer overrides them to /dev/null; the delivered target is
+// limited to a stream by auditLogPattern.
 var forbiddenDirectivePattern = regexp.MustCompile(`(?i)^(secdebuglog|secuploaddir)(?:[ \t]|$)`)
+
+// auditLogPattern matches SecAuditLog and its argument exactly as Coraza passes
+// it to the audit writer: the rest of the line after the first space.
+// SecAuditLogType is not matched: "secauditlog" must be followed by a space or
+// the end of line.
+var auditLogPattern = regexp.MustCompile(`(?i)^secauditlog(?: (.*))?$`)
+
+// auditLogStreams are the only SecAuditLog targets the plugin can write: its
+// serial writer special-cases these and opens every other target with
+// os.OpenFile, which fails in the WASM sandbox. The operator validates the
+// delivered text, not the /dev/null target pinned for validation.
+var auditLogStreams = map[string]struct{}{
+	"/dev/stdout": {},
+	"/dev/stderr": {},
+}
 
 // uploadKeepFilesPattern matches SecUploadKeepFiles and its value. Only "Off" is
 // accepted: every other value keeps uploaded files on disk, and the plugin has
@@ -225,7 +304,7 @@ var uploadKeepFilesPattern = regexp.MustCompile(`(?i)^secuploadkeepfiles(?:[ \t]
 
 // allowedIncludeTargets lists the reference forms a tenant may use. It is
 // static so neither a rejected path nor rule content can leak into status.
-const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-setup-conf, @owasp_crs/<path> or a RuleData file name"
+const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-setup-conf, @owasp_crs/*.conf, @owasp_crs/<file> or a RuleData file name"
 
 // ValidateIncludes rejects Include targets that address the operator
 // filesystem, unresolvable aliases, and directives that write host files. The
@@ -274,9 +353,9 @@ func ValidateIncludes(rules string, dataFiles map[string][]byte) error {
 // validateRuleText rejects the directives and Include targets a tenant rule
 // text (or an included data file) may not use. It returns the RuleData file
 // names the text Includes, so the caller can scan their content too.
-// shortcut: a glob Include is not expanded for scanning; only @owasp_crs/
-// globs are accepted, and those resolve inside the plugin's embedded tree,
-// which the operator cannot enumerate.
+// shortcut: a glob Include is not expanded for scanning; only the exact
+// @owasp_crs/*.conf is accepted, and those files resolve inside the plugin's
+// embedded tree, which the operator cannot enumerate.
 func validateRuleText(rules string) ([]string, error) {
 	// Coraza skips blank and comment lines before checking for a line
 	// continuation, so a trailing "\" would swallow the first directive of
@@ -301,6 +380,16 @@ func validateRuleText(rules string) ([]string, error) {
 				return nil, errors.New("SecUploadKeepFiles is not allowed: rule validation must not write host files")
 			}
 		}
+		if match := auditLogPattern.FindStringSubmatch(line); match != nil {
+			// Coraza strips the surrounding quotes of a wholly quoted argument.
+			target := match[1]
+			if len(target) >= 3 && target[0] == '"' && target[len(target)-1] == '"' {
+				target = target[1 : len(target)-1]
+			}
+			if _, ok := auditLogStreams[target]; !ok {
+				return nil, errors.New("SecAuditLog is only allowed with /dev/stdout or /dev/stderr")
+			}
+		}
 		match := includePattern.FindStringSubmatch(line)
 		if match == nil {
 			continue
@@ -315,9 +404,10 @@ func validateRuleText(rules string) ([]string, error) {
 			}
 		case isGlob(target):
 			// The validation WAF's root cannot expand a glob, and the plugin
-			// only resolves globs under @owasp_crs/: accepting one here would
-			// silently include nothing.
-			return nil, errors.New(`Include with a glob is only allowed under @owasp_crs/: use ` + allowedIncludeTargets)
+			// also expands crs/ patterns, so only the exact @owasp_crs/*.conf
+			// form is safe (see isRuntimeResolvedPath). Any other glob here
+			// would silently include nothing.
+			return nil, errors.New(`Include with a glob is only allowed as @owasp_crs/*.conf: use ` + allowedIncludeTargets)
 		default:
 			included = append(included, path.Clean(target))
 		}
@@ -326,11 +416,11 @@ func validateRuleText(rules string) ([]string, error) {
 }
 
 // ValidateRuleSourceRules validates SecLang rule text via Coraza. dataFiles
-// supplies in-memory files for @pmFromFile resolution. nil means no files are
-// provided: missing-file errors are skipped (RuleSource controller path).
-// Pass a non-nil map (including an empty map) to require that missing files
-// appear in the map. RuleSet aggregate validation remains authoritative for
-// cross-source and full RuleData-backed rules.
+// supplies in-memory files for Include and @pmFromFile resolution. nil means no
+// files are provided: missing-file errors are skipped (RuleSource controller
+// path). Pass a non-nil map (including an empty map) to require that missing
+// files appear in the map. RuleSet aggregate validation remains authoritative
+// for cross-source and full RuleData-backed rules.
 func ValidateRuleSourceRules(rules, ruleSourceName string, dataFiles map[string][]byte) error {
 	// The guard is cheap and applies to patch-only fragments too: they are
 	// skipped by Coraza, not by the directive and alias rules.

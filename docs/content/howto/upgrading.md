@@ -51,7 +51,9 @@ The readiness deadline applies to any accepted record this build never reconstru
 
 This release rejects rule text that opens or creates host files while the operator compiles it: `SecDebugLog` (including `/dev/stdout`), `SecUploadDir`, and `SecUploadKeepFiles` with any value other than `Off`. A RuleSet that an older version accepted with one of these directives now fails validation and becomes `Degraded` with `InvalidRuleSet`, and the Engine drops that content from its accepted configuration instead of publishing it again; the Gateway keeps the last configuration the operator published until the directive is removed. RuleSets whose rules `Include` a file carrying such a directive are affected the same way.
 
-The same guard rejects `Include` targets the plugin cannot resolve: unknown `@` aliases, globs outside `@owasp_crs/`, and `@owasp_crs/` globs that do not end in `.conf`. A RuleSet whose rules `Include` a RuleData file name containing `/` is rejected as well.
+`SecAuditLog` is now accepted only with `/dev/stdout` or `/dev/stderr`. Any other target made the plugin NACK the configuration (the WASM sandbox cannot open files), so the Engine reported `Ready` without a working WAF. `SecAuditLogType` is still accepted.
+
+The same guard rejects `Include` targets the plugin cannot resolve: unknown `@` aliases, globs outside the exact `@owasp_crs/*.conf` form, and globs in a non-final `@owasp_crs/` segment. A RuleSet whose rules `Include` a RuleData file name containing `/` is rejected as well.
 
 ## RuleData Size Limits
 
