@@ -24,6 +24,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -151,6 +152,23 @@ func TestPublicationReadinessLateFailuresDoNotFlipReadiness(t *testing.T) {
 	}
 	if err := readiness.Check(); err != nil {
 		t.Fatalf("Check() = %v after a late failure", err)
+	}
+}
+
+// TestPublicationReadinessExpiryWithoutMetrics covers the default tracker, which
+// has no Metrics registered: the deadline must still release readiness instead
+// of panicking on a nil counter.
+func TestPublicationReadinessExpiryWithoutMetrics(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	readiness := NewPublicationReadiness()
+	require.Nil(t, readiness.Metrics)
+	readiness.now = func() time.Time { return now }
+	readiness.deadline = time.Minute
+	readiness.Initialize([]*wafv1alpha1.Engine{acceptedEngine("shop", "stuck")})
+
+	now = now.Add(2 * time.Minute)
+	if err := readiness.Check(); err != nil {
+		t.Fatalf("Check() = %v after the deadline without metrics", err)
 	}
 }
 

@@ -187,10 +187,13 @@ func (l Limits) Validate() error {
 	if l.MaxDataFiles > pluginMaxDataFiles {
 		return fmt.Errorf("xds-max-data-files %d exceeds the plugin data file cap of %d files", l.MaxDataFiles, pluginMaxDataFiles)
 	}
-	// Worst case: every RuleData byte is base64-expanded (4/3) and every data
-	// file name is at its maximum length. If that cannot fit one message, a
+	// Worst case: every RuleData byte is base64-expanded and every data file
+	// name is at its maximum length. Base64 length is 4*ceil(size/3) per file,
+	// so only counting the decoded total as one blob under-estimates the
+	// padding; the bound allows 8 bytes of decoded input per data file, which
+	// covers any per-file remainder. If that cannot fit one message, a
 	// perfectly valid Engine would be accepted but never deliverable.
-	base64Bytes := (l.MaxDecodedDataBytes*4 + 2) / 3
+	base64Bytes := (l.MaxDecodedDataBytes*4 + 8*l.MaxDataFiles) / 3
 	keyOverhead := l.MaxDataFiles * (DataFileNameBytes + dataFileKeyOverheadBytes)
 	if required := base64Bytes + keyOverhead + MessageEnvelopeBytes; required > l.MaxMessageBytes {
 		return fmt.Errorf("xds-max-decoded-data-bytes %d and xds-max-data-files %d need up to %d bytes once base64-encoded and keyed, which exceeds xds-max-message-bytes %d", l.MaxDecodedDataBytes, l.MaxDataFiles, required, l.MaxMessageBytes)

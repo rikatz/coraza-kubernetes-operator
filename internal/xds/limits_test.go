@@ -57,24 +57,28 @@ func TestLimitsValidateRejectsPluginCapViolations(t *testing.T) {
 // TestLimitsValidateRejectsUndeliverableCombination checks the combined bound:
 // the base64-expanded decoded limit plus the maximum key overhead must fit one
 // message after the envelope, or accepted Engines would never be delivered.
+// One byte per file is the maximum-padding case: each file encodes to 4 bytes,
+// so three files need 12 bytes, not the 4 bytes a single-blob estimate of the
+// same 3 decoded bytes would give.
 func TestLimitsValidateRejectsUndeliverableCombination(t *testing.T) {
-	files := 1
-	decoded := 3
-	base64Bytes := (decoded*4 + 2) / 3
-	maxMessage := base64Bytes + files*(DataFileNameBytes+dataFileKeyOverheadBytes) + MessageEnvelopeBytes
+	for _, files := range []int{1, 3, 4096} {
+		decoded := files
+		base64Bytes := 4 * files
+		maxMessage := base64Bytes + files*(DataFileNameBytes+dataFileKeyOverheadBytes) + MessageEnvelopeBytes
 
-	assert.NoError(t, Limits{
-		MaxMessageBytes:     maxMessage,
-		MaxDecodedDataBytes: decoded,
-		MaxDataFiles:        files,
-	}.Validate(), "the boundary must be accepted")
+		assert.NoError(t, Limits{
+			MaxMessageBytes:     maxMessage,
+			MaxDecodedDataBytes: decoded,
+			MaxDataFiles:        files,
+		}.Validate(), "the boundary must be accepted")
 
-	err := Limits{
-		MaxMessageBytes:     maxMessage - 1,
-		MaxDecodedDataBytes: decoded,
-		MaxDataFiles:        files,
-	}.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "xds-max-message-bytes")
-	assert.Contains(t, err.Error(), "base64")
+		err := Limits{
+			MaxMessageBytes:     maxMessage - 1,
+			MaxDecodedDataBytes: decoded,
+			MaxDataFiles:        files,
+		}.Validate()
+		require.Error(t, err, "per-file base64 padding must count against the message limit")
+		assert.Contains(t, err.Error(), "xds-max-message-bytes")
+		assert.Contains(t, err.Error(), "base64")
+	}
 }

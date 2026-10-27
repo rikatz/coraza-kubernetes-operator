@@ -243,7 +243,9 @@ func (p *PublicationReadiness) reportExpired() {
 	for _, key := range keys {
 		p.Logger.Info("accepted configuration was not reconstructed within the readiness deadline",
 			"engine", key, "reason", p.pending[key])
-		p.Metrics.ColdReconstructionFailure()
+		if p.Metrics != nil {
+			p.Metrics.ColdReconstructionFailure()
+		}
 	}
 	p.pending = make(map[string]string)
 }
