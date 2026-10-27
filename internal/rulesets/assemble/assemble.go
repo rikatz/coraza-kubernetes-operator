@@ -178,12 +178,15 @@ func validateReferences(in Inputs) error {
 	// The plugin resolves every data file name with fs.ValidPath, rejects ".",
 	// and rejects names longer than 253 bytes, failing the whole configuration.
 	// CEL only guards writes, so objects created before those rules existed
-	// must be caught here.
+	// must be caught here. A name with "/" is also rejected: the CRD's CEL
+	// pattern has no separator, and Coraza resolves a nested Include relative
+	// to the including file's directory, so a generated directory would make
+	// the guard scan a different file than the plugin parses.
 	var invalid, shadowed []string
 	for _, data := range in.Data {
 		for name := range data.Files {
 			switch {
-			case name == "." || len(name) > maxDataFileNameBytes || !fs.ValidPath(name):
+			case name == "." || len(name) > maxDataFileNameBytes || strings.Contains(name, "/") || !fs.ValidPath(name):
 				invalid = append(invalid, fmt.Sprintf("%q (RuleData %s)", truncateDataFileName(name), data.Name))
 			case shadowsEmbeddedFile(name):
 				shadowed = append(shadowed, fmt.Sprintf("%q (RuleData %s)", truncateDataFileName(name), data.Name))

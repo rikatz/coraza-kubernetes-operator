@@ -384,3 +384,20 @@ func TestAssembleRejectsEmptyAndOversizedDataFileNames(t *testing.T) {
 	assert.Contains(t, err.Error(), `"`+strings.Repeat("a", 64)+`..." (RuleData data)`)
 	assert.NotContains(t, err.Error(), strings.Repeat("a", 254))
 }
+
+// TestAssembleRejectsDataFileNamesWithSeparators covers legacy names that the
+// CRD's CEL pattern rejects on write. A separator would let Coraza resolve an
+// Include from another directory than the one the guard scans.
+func TestAssembleRejectsDataFileNamesWithSeparators(t *testing.T) {
+	_, err := assemble.Assemble(assemble.Inputs{
+		Sources: []assemble.SourceInput{{Name: "rules", Rules: "SecRuleEngine On"}},
+		Data: []assemble.DataInput{{
+			Name:  "legacy-data",
+			Files: map[string]string{"sub/b.data": "x", "ok.data": "y"},
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "spec.data contains invalid data file name(s)")
+	assert.Contains(t, err.Error(), `"sub/b.data" (RuleData legacy-data)`)
+	assert.NotContains(t, err.Error(), "ok.data")
+}

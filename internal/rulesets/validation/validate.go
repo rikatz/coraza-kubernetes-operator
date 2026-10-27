@@ -116,10 +116,12 @@ func ExtractMissingFileBasename(err error) (string, bool) {
 // The four file aliases name a single embedded file. @owasp_crs/<path> maps to
 // the embedded CRS tree, so the path must name a file inside it: the bare
 // @owasp_crs and a path with an empty, "." or ".." segment name the directory
-// itself, which cannot be included. A glob in the final segment (for example
-// @owasp_crs/*.conf) is allowed: Coraza expands it against the embedded tree.
-// A wrong file name there is a documented delivery risk: the operator cannot
-// verify the embedded file list.
+// itself, which cannot be included. A glob only works where the embedded tree
+// holds the files: the plugin expands it with the CRS directory's ReadDir, so
+// it must sit in the final segment and name .conf files (for example
+// @owasp_crs/*.conf). Any other pattern matches nothing or parses non-rule
+// files, which makes the plugin NACK every push. A wrong file name there is a
+// documented delivery risk: the operator cannot verify the embedded file list.
 func isRuntimeResolvedPath(path string) bool {
 	switch path {
 	case "@recommended-conf", "@demo-conf", "@ftw-conf", "@crs-setup-conf":
@@ -129,12 +131,25 @@ func isRuntimeResolvedPath(path string) bool {
 	if !ok {
 		return false
 	}
-	for _, elem := range strings.Split(rel, "/") {
+	elems := strings.Split(rel, "/")
+	for _, elem := range elems {
 		if elem == "" || elem == "." || elem == ".." {
 			return false
 		}
 	}
-	return true
+	for _, elem := range elems[:len(elems)-1] {
+		if isGlob(elem) {
+			return false
+		}
+	}
+	last := elems[len(elems)-1]
+	return !isGlob(last) || strings.HasSuffix(last, ".conf")
+}
+
+// isGlob reports whether elem contains a glob metacharacter. Coraza expands
+// Include targets with fs.Glob, whose pattern syntax uses these characters.
+func isGlob(elem string) bool {
+	return strings.ContainsAny(elem, `*?[\`)
 }
 
 // isOSPath reports whether path addresses the operator's filesystem instead of
@@ -239,6 +254,9 @@ func ValidateIncludes(rules string, dataFiles map[string][]byte) error {
 			return fmt.Errorf("included RuleData file %s: %w", current.name, err)
 		}
 		for _, name := range included {
+			// Coraza resolves a nested Include relative to the including
+			// file's directory, so the guard must scan that same file.
+			name = path.Join(path.Dir(current.name), name)
 			if _, seen := scanned[name]; seen {
 				continue
 			}
@@ -256,8 +274,9 @@ func ValidateIncludes(rules string, dataFiles map[string][]byte) error {
 // validateRuleText rejects the directives and Include targets a tenant rule
 // text (or an included data file) may not use. It returns the RuleData file
 // names the text Includes, so the caller can scan their content too.
-// shortcut: a glob Include is not expanded for scanning; Coraza still parses
-// the matched files during compilation, which happens in the in-memory root.
+// shortcut: a glob Include is not expanded for scanning; only @owasp_crs/
+// globs are accepted, and those resolve inside the plugin's embedded tree,
+// which the operator cannot enumerate.
 func validateRuleText(rules string) ([]string, error) {
 	// Coraza skips blank and comment lines before checking for a line
 	// continuation, so a trailing "\" would swallow the first directive of
@@ -294,6 +313,11 @@ func validateRuleText(rules string) ([]string, error) {
 			if !isRuntimeResolvedPath(target) {
 				return nil, errors.New(`Include alias is not resolved by the plugin: use ` + allowedIncludeTargets)
 			}
+		case isGlob(target):
+			// The validation WAF's root cannot expand a glob, and the plugin
+			// only resolves globs under @owasp_crs/: accepting one here would
+			// silently include nothing.
+			return nil, errors.New(`Include with a glob is only allowed under @owasp_crs/: use ` + allowedIncludeTargets)
 		default:
 			included = append(included, path.Clean(target))
 		}

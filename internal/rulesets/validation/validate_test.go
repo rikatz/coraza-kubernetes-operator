@@ -365,6 +365,7 @@ func TestValidateIncludes(t *testing.T) {
 		"Include @ftw-conf",
 		"Include @crs-setup-conf",
 		"Include @owasp_crs/*.conf",
+		"Include @owasp_crs/REQUEST-*.conf",
 		"Include @owasp_crs/REQUEST-901-INITIALIZATION.conf",
 		"Include some.data",
 		"Include ./some.data",
@@ -376,6 +377,48 @@ func TestValidateIncludes(t *testing.T) {
 			assert.NoError(t, ValidateIncludes(rules, nil))
 		})
 	}
+}
+
+// TestValidateIncludesRejectsUnresolvableGlobs covers globs the plugin cannot
+// expand: only @owasp_crs/ patterns ending in .conf are resolvable, and a
+// root-level glob matches nothing in either filesystem.
+func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
+	for _, target := range []string{
+		"@owasp_crs/*",
+		"@owasp_crs/*.data",
+		"@owasp_crs/REQUEST-*.data",
+		"@owasp_crs/*/*.conf",
+		"@owasp_crs/*/REQUEST-901-INITIALIZATION.conf",
+		"@recommended-conf*",
+		"*.conf",
+		"rules/*.conf",
+		"./*.conf",
+	} {
+		t.Run(target, func(t *testing.T) {
+			err := ValidateIncludes("Include "+target, nil)
+			require.Error(t, err, "the plugin cannot expand this glob")
+			assert.Contains(t, err.Error(), "@owasp_crs/<path>", "the error must name the allowed aliases")
+		})
+	}
+}
+
+// TestValidateIncludesNestedIncludeResolvesRelativeToIncludingFile covers a
+// nested Include: Coraza joins the target to the including file's directory,
+// so the guard must scan that file, not a same-named file at the root.
+func TestValidateIncludesNestedIncludeResolvesRelativeToIncludingFile(t *testing.T) {
+	dataFiles := map[string][]byte{
+		"sub/a.data": []byte("Include b.data"),
+		"b.data":     []byte("SecDebugLog /dev/stdout"),
+		"sub/b.data": []byte("SecRuleEngine On"),
+	}
+
+	require.NoError(t, ValidateIncludes("Include sub/a.data", dataFiles),
+		"the root-level b.data is not the file Coraza parses")
+
+	dataFiles["sub/b.data"] = []byte("SecDebugLog /dev/stdout")
+	err := ValidateIncludes("Include sub/a.data", dataFiles)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "included RuleData file sub/b.data")
 }
 
 // TestValidateIncludesRejectsUnknownAliases covers the alias allowlist: an
