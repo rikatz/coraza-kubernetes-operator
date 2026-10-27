@@ -101,19 +101,21 @@ func validationStubTargets(rules string, dataFiles map[string][]byte) []string {
 	return targets
 }
 
-// includeTarget returns an Include argument exactly as Coraza resolves it:
-// Coraza trims the line and strips one matched pair of double quotes around the
-// whole argument, never a single quote (internal/seclang/parser.go,
-// evaluateLine). The guard and the stubs must agree with that, or they accept a
-// target the plugin reads under a different, nonexistent name. Coraza only
-// strips a quoted argument of three bytes or more, so a lone pair of quotes
+// includeTarget returns an Include target exactly as Coraza resolves it: Coraza
+// trims the line, cuts it at the first single space and strips one matched pair
+// of double quotes around the whole argument, never a single quote
+// (internal/seclang/parser.go, evaluateLine). The guard and the stubs must agree
+// with that, or they accept a target the plugin reads under a different,
+// nonexistent name. The argument is not trimmed: only one space separates the
+// directive from the target, so "Include  foo" and "Include \tfoo" name a target
+// that starts with whitespace, and Coraza resolves no file for either. Coraza
+// only strips a quoted argument of three bytes or more, so a lone pair of quotes
 // keeps them and the guard rejects the leftover quote.
 func includeTarget(arg string) string {
-	target := strings.TrimSpace(arg)
-	if len(target) >= 3 && target[0] == '"' && target[len(target)-1] == '"' {
-		target = target[1 : len(target)-1]
+	if len(arg) >= 3 && arg[0] == '"' && arg[len(arg)-1] == '"' {
+		arg = arg[1 : len(arg)-1]
 	}
-	return target
+	return arg
 }
 
 // ruleDataIncludeNames returns the RuleData file names a rule text Includes.
@@ -310,8 +312,10 @@ func ShouldSkipMissingFileError(err error, dataFiles map[string][]byte) bool {
 }
 
 // includePattern matches an Include directive and its whole argument in rule
-// text already normalised by joinActiveRuleLines.
-var includePattern = regexp.MustCompile(`(?i)^include[ \t]+(.+)$`)
+// text already normalised by joinActiveRuleLines. Coraza cuts the line at the
+// first single space, so the argument starts right after exactly one space: an
+// extra space or a tab is part of the file name and the pattern must keep it.
+var includePattern = regexp.MustCompile(`(?i)^include (.+)$`)
 
 // forbiddenDirectivePattern matches directives that make Coraza open or create a
 // host file while compiling a WAF, regardless of the in-memory root filesystem.
@@ -376,9 +380,12 @@ const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-se
 // skip that defers RuleData names to aggregate validation. Runtime aliases
 // (@owasp_crs/..., @crs-setup-conf, ...) are accepted because the plugin
 // resolves them from its embedded filesystem; a literal CRS-tree path must name
-// a .conf rule file (see isRuntimeResolvedPath and nonRuleCrsTarget). A target
-// that still carries a quote after the single pair of double quotes Coraza
-// strips is rejected too: Coraza reads the quote as part of the file name.
+// a .conf rule file (see isRuntimeResolvedPath and nonRuleCrsTarget). Coraza cuts
+// the line at the first single space, so the target starts right after it: a
+// target that still carries a quote after the single pair of double quotes Coraza
+// strips, or that starts with whitespace because the tenant used extra spaces or
+// a tab, is rejected too. Coraza resolves neither: it reads the quote or the
+// whitespace as part of the file name and silently compiles zero rules.
 //
 // dataFiles are the RuleData files merged for the RuleSet. An Include of a
 // RuleData name is parsed as rule text, so the content of every included file
@@ -462,6 +469,8 @@ func validateRuleText(rules string) ([]string, error) {
 		}
 		target := includeTarget(match[1])
 		switch {
+		case target != strings.TrimLeft(target, " \t"):
+			return nil, errors.New(`Include must separate the target with exactly one space: use ` + allowedIncludeTargets)
 		case strings.ContainsAny(target, `"'`):
 			return nil, errors.New(`Include target must not contain quotes: only one matched pair of double quotes around the whole target is stripped, use ` + allowedIncludeTargets)
 		case isOSPath(target):

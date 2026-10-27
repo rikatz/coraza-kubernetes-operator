@@ -83,6 +83,9 @@ references before an Engine accepts the configuration:
   The argument may be unquoted or wrapped in one matched pair of double quotes,
   as Coraza strips only that pair: a single-quoted or half-quoted target is
   rejected, because the plugin would read the quote as part of the file name.
+  Exactly one space may separate `Include` from the target, because Coraza cuts
+  the line at the first single space: extra spaces or a tab before the target are
+  part of the file name and resolve no file at all, so they are rejected too.
   A glob is accepted only as the exact `@owasp_crs/*.conf`, one segment after the
   alias: the plugin expands it against the embedded CRS tree, and Coraza only logs
   an empty glob result instead of failing, so the operator cannot tell whether a

@@ -475,10 +475,11 @@ func TestValidateIncludes(t *testing.T) {
 }
 
 // TestValidateIncludesQuotesMirrorCoraza covers the quoting of the Include
-// argument. Coraza trims the line and strips one matched pair of double quotes
-// around the whole argument, never a single quote (internal/seclang/parser.go).
-// The guard must resolve the target the same way: any other quoting names a
-// different file in the plugin, which then builds a zero-rule WAF or NACKs.
+// argument. Coraza trims the line, cuts it at the first single space and strips
+// one matched pair of double quotes around the whole argument, never a single
+// quote (internal/seclang/parser.go, evaluateLine). The guard must resolve the
+// target the same way: any other quoting names a different file in the plugin,
+// which then builds a zero-rule WAF or NACKs.
 func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
 	const marker = "tenant-quote-marker-3e81"
 	for _, rules := range []string{
@@ -495,6 +496,23 @@ func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
 			require.Error(t, err, "a quote Coraza does not strip must not pass the guard")
 			assert.Contains(t, err.Error(), "quote")
 			assert.NotContains(t, err.Error(), marker, "the error must stay static")
+		})
+	}
+
+	// Coraza cuts at the first single space, so an extra space or a tab after
+	// "Include" is part of the file name and resolves nothing: a zero-rule WAF
+	// behind a Ready Engine.
+	for _, rules := range []string{
+		"Include  \"@owasp_crs/*.conf\"",
+		"Include  @owasp_crs/*.conf",
+		"Include \t@owasp_crs/*.conf",
+		"Include  blocklist.conf",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			err := ValidateIncludes(rules, map[string][]byte{})
+			require.Error(t, err, "only one space may separate Include from the target")
+			assert.Contains(t, err.Error(), "exactly one space", "the error must stay static")
+			assert.Contains(t, err.Error(), "@owasp_crs/*.conf", "the error must name the allowed targets")
 		})
 	}
 
