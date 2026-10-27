@@ -12,18 +12,16 @@ By the end, you will have a working WAF protecting a sample application behind a
 ## Local demo in one command
 
 To see the whole flow on a local [KIND](https://kind.sigs.k8s.io/) cluster — operator,
-Gateway, demo rules, and the real `coraza-proxy-wasm` module — run from the repository root:
-
-```bash
-make demo
-```
-
-To build the ECDS-aware plugin from a local worktree instead of the default
-checkout (Path B, RuleData delivery, needs the `ecds/ecds-consumer` branch):
+Gateway, demo rules, and the real `coraza-proxy-wasm` module — run from the repository root
+with a local checkout of the ECDS-ready plugin:
 
 ```bash
 make demo WASM_PLUGIN_DIR=/path/to/coraza-proxy-wasm-ecds
 ```
+
+The default pinned plugin commit (`WASM_PLUGIN_VERSION`) is not published yet, so
+`make demo` without `WASM_PLUGIN_DIR` cannot clone it. Point `WASM_PLUGIN_DIR` at a
+sibling worktree on the `ecds/ecds-consumer` branch (Path B, RuleData delivery).
 
 It builds the plugin with TinyGo, bundles it into the operator image, creates the cluster
 with Istio (Sail operator), installs the operator, applies `config/samples`, and asserts that
@@ -36,10 +34,9 @@ a normal request passes while the demo attacks are blocked:
 ```
 
 Requirements: Docker, `kind`, `helm`, `kubectl`, and TinyGo 0.34 (`TINYGO=/path/to/tinygo`
-overrides the default `$HOME/bin/tinygocoraza/tinygo/bin/tinygo`). The first run clones the
-pinned plugin into `.cache/` and downloads the Go 1.23 toolchain TinyGo needs. The
-built module replaces the fixture in `internal/assets`; restore it with
-`git checkout internal/assets`.
+overrides the default `$HOME/bin/tinygocoraza/tinygo/bin/tinygo`). The first run downloads
+the Go 1.23 toolchain TinyGo needs. The built module replaces the fixture in
+`internal/assets`; restore it with `git checkout internal/assets`.
 
 The rest of this tutorial assumes you bring your own cluster.
 

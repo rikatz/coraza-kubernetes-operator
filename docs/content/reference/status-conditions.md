@@ -101,6 +101,8 @@ The RuleData has been loaded by a RuleSet reconciliation.
 
 The rules have been compiled, validated, and accepted for delivery over ECDS. When the `Ready` condition is `True`, the **reason** is typically `RulesAccepted`.
 
+`Ready` only means the RuleSet content is accepted. Delivery limits are enforced when an **Engine** accepts and publishes the configuration, so a RuleSet whose content exceeds those limits is still accepted while every Engine referencing it reports `Degraded`.
+
 ### Progressing
 
 The RuleSet is being processed. This happens when the **RuleSet** or a referenced **RuleSource** or **RuleData** changes. While waiting for **RuleSource** validation status to match the current source generation, the **reason** may be `AwaitingRuleSourceValidation` (the message lists pending source names).
