@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -48,25 +49,41 @@ func VerifyBundledManifest(manifest *assets.Manifest, data []byte) error {
 	return nil
 }
 
+// defaultPublicationDeadline bounds how long an unreconstructable accepted
+// record can gate readiness. Without it a tenant can leave one accepted record
+// this build can never reproduce (for example, its RuleSet was deleted) and
+// keep every replica unready, which fails every Gateway closed.
+const defaultPublicationDeadline = 2 * time.Minute
+
 // PublicationReadiness tracks whether this replica has reconstructed every
 // accepted Engine configuration present at startup. Failures after the initial
 // sync do not flip the replica unready.
 type PublicationReadiness struct {
 	// Logger reports accepted records this build cannot publish by design.
 	Logger logr.Logger
+	// Metrics records accepted records that never reconstructed.
+	Metrics *Metrics
 
-	mu          sync.Mutex
-	initialized bool
-	pending     map[string]string
+	mu            sync.Mutex
+	initialized   bool
+	initializedAt time.Time
+	deadline      time.Duration
+	now           func() time.Time
+	pending       map[string]string
 	// outcomes holds reconciles that completed before the startup Engine list
 	// was reconciled, so a fast reconcile is not lost when Initialize runs.
 	outcomes map[string]string
+	// expired is set once the deadline passed and the stuck records were
+	// reported. They stop gating readiness from then on.
+	expired bool
 }
 
 // NewPublicationReadiness returns an uninitialized tracker.
 func NewPublicationReadiness() *PublicationReadiness {
 	return &PublicationReadiness{
 		Logger:   logr.Discard(),
+		deadline: defaultPublicationDeadline,
+		now:      time.Now,
 		pending:  make(map[string]string),
 		outcomes: make(map[string]string),
 	}
@@ -83,6 +100,7 @@ func (p *PublicationReadiness) Initialize(engines []*wafv1alpha1.Engine) {
 		return
 	}
 	p.initialized = true
+	p.initializedAt = p.currentTime()
 	stale := 0
 	for _, engine := range engines {
 		if engine == nil || engine.Status == nil || engine.Status.AcceptedConfiguration == nil {
@@ -161,6 +179,10 @@ func (p *PublicationReadiness) Check() error {
 	if len(p.pending) == 0 {
 		return nil
 	}
+	if p.deadlinePassed() {
+		p.reportExpired()
+		return nil
+	}
 
 	keys := make([]string, 0, len(p.pending))
 	for key := range p.pending {
@@ -186,6 +208,42 @@ func (p *PublicationReadiness) Check() error {
 		builder.WriteString(fmt.Sprintf("; and %d more", len(keys)-len(reported)))
 	}
 	return fmt.Errorf("accepted configurations are not reconstructed yet: %s", builder.String())
+}
+
+func (p *PublicationReadiness) currentTime() time.Time {
+	if p.now == nil {
+		return time.Now()
+	}
+	return p.now()
+}
+
+func (p *PublicationReadiness) deadlinePassed() bool {
+	deadline := p.deadline
+	if deadline <= 0 {
+		deadline = defaultPublicationDeadline
+	}
+	return !p.currentTime().Before(p.initializedAt.Add(deadline))
+}
+
+// reportExpired stops the remaining pending records from gating readiness and
+// reports each one once. This is the last resort for an accepted record this
+// build can never reconstruct.
+func (p *PublicationReadiness) reportExpired() {
+	if p.expired {
+		return
+	}
+	p.expired = true
+
+	keys := make([]string, 0, len(p.pending))
+	for key := range p.pending {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		p.Logger.Info("accepted configuration was not reconstructed within the readiness deadline",
+			"engine", key, "reason", p.pending[key])
+		p.Metrics.ColdReconstructionFailure()
+	}
 }
 
 // PublicationStartup waits for the informer cache, records the startup Engine

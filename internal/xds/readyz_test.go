@@ -20,7 +20,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -148,6 +151,77 @@ func TestPublicationReadinessLateFailuresDoNotFlipReadiness(t *testing.T) {
 	}
 	if err := readiness.Check(); err != nil {
 		t.Fatalf("Check() = %v after a late failure", err)
+	}
+}
+
+// TestPublicationReadinessDeadlineBoundsPendingRecords checks that an accepted
+// record this build cannot reconstruct stops gating readiness after the
+// deadline, while it still gates before it.
+func TestPublicationReadinessDeadlineBoundsPendingRecords(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	metrics, err := NewMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readiness := NewPublicationReadiness()
+	readiness.Metrics = metrics
+	readiness.now = func() time.Time { return now }
+	readiness.deadline = time.Minute
+	readiness.Initialize([]*wafv1alpha1.Engine{acceptedEngine("shop", "stuck")})
+
+	now = now.Add(59 * time.Second)
+	if err := readiness.Check(); err == nil {
+		t.Fatal("Check() = nil before the deadline")
+	}
+
+	now = now.Add(2 * time.Second)
+	if err := readiness.Check(); err != nil {
+		t.Fatalf("Check() = %v after the deadline", err)
+	}
+	if got := testutil.ToFloat64(metrics.coldReconstruction); got != 1 {
+		t.Fatalf("cold reconstruction counter = %v, want 1", got)
+	}
+
+	// The record is reported once; later probes stay ready.
+	now = now.Add(time.Minute)
+	if err := readiness.Check(); err != nil {
+		t.Fatalf("Check() = %v after the deadline", err)
+	}
+	if got := testutil.ToFloat64(metrics.coldReconstruction); got != 1 {
+		t.Fatalf("cold reconstruction counter = %v after a second check, want 1", got)
+	}
+}
+
+// TestPublicationReadinessResolvedRecordIgnoresDeadline checks that a record
+// reconstructed before the deadline makes readiness pass immediately.
+func TestPublicationReadinessResolvedRecordIgnoresDeadline(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	readiness := NewPublicationReadiness()
+	readiness.now = func() time.Time { return now }
+	readiness.deadline = time.Minute
+	readiness.Initialize([]*wafv1alpha1.Engine{acceptedEngine("shop", "checkout")})
+
+	if !readiness.RecordFailure("shop", "checkout", errors.New("cannot reconstruct")) {
+		t.Fatal("RecordFailure() = false for a pending Engine")
+	}
+	readiness.RecordSuccess("shop", "checkout")
+
+	now = now.Add(2 * time.Minute)
+	if err := readiness.Check(); err != nil {
+		t.Fatalf("Check() = %v for a resolved record", err)
+	}
+}
+
+func acceptedEngine(namespace, name string) *wafv1alpha1.Engine {
+	return &wafv1alpha1.Engine{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		Status: &wafv1alpha1.EngineStatus{
+			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{
+				RenderingSchemaVersion: render.RenderingSchemaVersion,
+				Version:                "sha256:v1",
+			},
+		},
 	}
 }
 
