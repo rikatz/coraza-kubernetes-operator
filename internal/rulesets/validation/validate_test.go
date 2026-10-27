@@ -476,10 +476,11 @@ func TestValidateIncludes(t *testing.T) {
 
 // TestValidateIncludesQuotesMirrorCoraza covers the quoting of the Include
 // argument. Coraza trims the line, cuts it at the first single space and strips
-// one matched pair of double quotes around the whole argument, never a single
-// quote (internal/seclang/parser.go, evaluateLine). The guard must resolve the
-// target the same way: any other quoting names a different file in the plugin,
-// which then builds a zero-rule WAF or NACKs.
+// every leading and trailing double quote when the whole argument is quoted and
+// at least three bytes long, never a single quote (internal/seclang/parser.go,
+// evaluateLine). The guard must resolve the target the same way: any other
+// quoting names a different file in the plugin, which then builds a zero-rule
+// WAF or NACKs.
 func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
 	const marker = "tenant-quote-marker-3e81"
 	for _, rules := range []string{
@@ -502,23 +503,67 @@ func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
 	for _, rules := range []string{
 		"Include \"@owasp_crs/*.conf\"",
 		"Include @owasp_crs/*.conf",
-		"Include  @owasp_crs/*.conf",
-		"Include \t@owasp_crs/*.conf",
 		"Include \"@crs-setup-conf\"",
 		"Include \"blocklist.conf\"",
 		"Include blocklist.conf",
 	} {
 		t.Run(rules, func(t *testing.T) {
 			assert.NoError(t, ValidateIncludes(rules, map[string][]byte{}),
-				"Coraza trims the argument, so quotes and padding resolve the same target")
+				"Coraza strips the surrounding double quotes, so the target resolves")
 		})
 	}
 }
 
+// TestValidateIncludesRejectsPaddedGlobs covers the one target Coraza does not
+// trim before using it: FromFile decides glob vs literal on the raw argument and
+// only trims the name it opens afterwards (internal/seclang/parser.go). A padded
+// glob therefore matches nothing, Coraza only logs the empty result, and the WAF
+// compiles with zero rules while the Engine reports Ready. A padded non-glob is
+// trimmed and resolves normally.
+func TestValidateIncludesRejectsPaddedGlobs(t *testing.T) {
+	for _, rules := range []string{
+		"Include  @owasp_crs/*.conf",
+		"Include \"@owasp_crs/*.conf \"",
+		"Include \u00a0@owasp_crs/*.conf",
+		"Include \t@owasp_crs/*.conf",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			err := ValidateIncludes(rules, map[string][]byte{})
+			require.Error(t, err, "Coraza expands the padded glob and matches nothing")
+			assert.Contains(t, err.Error(), "glob")
+			assert.Contains(t, err.Error(), "@owasp_crs/*.conf", "the error must name the allowed form")
+
+			err = ValidateRuleSourceRules(rules, "padded-glob-rs", map[string][]byte{})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "padded-glob-rs")
+		})
+	}
+
+	dataFiles := map[string][]byte{"blocklist.data": []byte("SecRuleEngine On\n")}
+	for _, rules := range []string{
+		"Include @owasp_crs/*.conf",
+		"Include \"@owasp_crs/*.conf\"",
+		"Include  blocklist.data",
+		"Include \"blocklist.data \"",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			assert.NoError(t, ValidateIncludes(rules, dataFiles))
+			assert.NoError(t, ValidateRuleSourceRules(rules, "padded-rs", dataFiles))
+		})
+	}
+
+	// Un-guarded, the padded glob is exactly what the Engine reported Ready on:
+	// Coraza logs the empty result and compiles a zero-rule WAF without an error.
+	waf, err := coraza.NewWAF(BuildWAFConfig("Include  @owasp_crs/*.conf", nil))
+	require.NoError(t, err)
+	CloseWAF(waf)
+}
+
 // TestValidateIncludesTrimsTargetLikeCoraza covers the whitespace Coraza trims
-// around the Include argument: the guard must resolve the same name Coraza
+// around a non-glob Include argument: the guard must resolve the same name Coraza
 // opens. Otherwise a padded name is never scanned, while Coraza still reads the
 // real file and a SecDebugLog inside it creates a host file during validation.
+// A glob is not trimmed (see TestValidateIncludesRejectsPaddedGlobs).
 func TestValidateIncludesTrimsTargetLikeCoraza(t *testing.T) {
 	const marker = "padding-marker-7b12"
 	debugLog := filepath.Join(t.TempDir(), marker+".log")

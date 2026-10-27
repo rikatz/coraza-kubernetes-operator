@@ -101,21 +101,20 @@ func validationStubTargets(rules string, dataFiles map[string][]byte) []string {
 	return targets
 }
 
-// includeTarget returns an Include target exactly as Coraza resolves it:
-// evaluateLine cuts the trimmed line at the first space and strips one matched
-// pair of double quotes, never a single quote, when the argument is at least
-// three bytes long; FromFile then trims the name it opens
-// (internal/seclang/parser.go). The guard and the stubs must agree with that, or
-// they resolve a padded name the plugin reads under a different one: the guard
-// then never scans the included file, and Coraza still opens it. Coraza only
-// strips a quoted argument of three bytes or more, so a lone pair of quotes
-// keeps them and the guard rejects the leftover quote.
+// includeTarget returns the Include argument exactly as Coraza's evaluateLine
+// produces it: the text after the first single space, with every leading and
+// trailing double quote stripped when the argument is wholly quoted and at
+// least three bytes long (strings.Trim, never a single quote). FromFile decides
+// glob vs literal on this value: it expands a glob with the argument untrimmed
+// and trims only the literal name it opens (internal/seclang/parser.go). The
+// guard and the stubs must agree with that, or they resolve a name the plugin
+// reads under a different one: the guard then never scans the included file,
+// and Coraza still opens it.
 func includeTarget(arg string) string {
-	target := strings.TrimSpace(arg)
-	if len(target) >= 3 && target[0] == '"' && target[len(target)-1] == '"' {
-		target = target[1 : len(target)-1]
+	if len(arg) >= 3 && arg[0] == '"' && arg[len(arg)-1] == '"' {
+		return strings.Trim(arg, "\"")
 	}
-	return strings.TrimSpace(target)
+	return arg
 }
 
 // ruleDataIncludeNames returns the RuleData file names a rule text Includes.
@@ -129,7 +128,11 @@ func ruleDataIncludeNames(rules string) []string {
 			continue
 		}
 		target := includeTarget(match[1])
-		if isOSPath(target) || strings.HasPrefix(target, "@") || isGlob(target) {
+		if isGlob(target) {
+			continue
+		}
+		target = strings.TrimSpace(target)
+		if isOSPath(target) || strings.HasPrefix(target, "@") {
 			continue
 		}
 		names = append(names, path.Clean(target))
@@ -147,7 +150,10 @@ func runtimeIncludeTargets(rules string) []string {
 			continue
 		}
 		target := includeTarget(match[1])
-		if isRuntimeResolvedPath(target) && !strings.Contains(target, "*") {
+		if isGlob(target) {
+			continue
+		}
+		if target = strings.TrimSpace(target); isRuntimeResolvedPath(target) {
 			targets = append(targets, target)
 		}
 	}
@@ -214,7 +220,7 @@ func ExtractMissingFileBasename(err error) (string, bool) {
 // so both are rejected. A glob only works where the embedded tree holds the files
 // and every match is valid rule text. The plugin expands it with the CRS
 // directory's ReadDir, and Coraza only logs an empty glob result, so a pattern
-// that matches nothing silently yields a zero-rule WAF. The exact
+// that matches nothing silently yields a zero-rule WAF. The exact unpadded
 // @owasp_crs/*.conf is the only glob the embedded tree guarantees to match
 // (every embedded CRS rule file ends in .conf): any other pattern is rejected
 // because the operator cannot enumerate what it matches, not because it fails:
@@ -381,11 +387,13 @@ const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-se
 // skip that defers RuleData names to aggregate validation. Runtime aliases
 // (@owasp_crs/..., @crs-setup-conf, ...) are accepted because the plugin
 // resolves them from its embedded filesystem; a literal CRS-tree path must name
-// a .conf rule file (see isRuntimeResolvedPath and nonRuleCrsTarget). The
-// argument is trimmed like Coraza's FromFile, so a padded target is accepted and
-// resolved to the name Coraza opens; a target that still carries a quote after
-// the single pair of double quotes Coraza strips is rejected, because Coraza
-// reads the quote as part of the file name and silently compiles zero rules.
+// a .conf rule file (see isRuntimeResolvedPath and nonRuleCrsTarget). Coraza
+// trims a non-glob Include target, so a padded target is accepted and resolved
+// to the name Coraza opens. It expands a glob from the untrimmed argument, so a
+// glob is accepted only as the exact unpadded @owasp_crs/*.conf: a padded
+// pattern matches nothing and compiles a zero-rule WAF without an error. A
+// target that still carries a quote after the double quotes Coraza strips is
+// rejected, because Coraza reads the quote as part of the file name.
 //
 // dataFiles are the RuleData files merged for the RuleSet. An Include of a
 // RuleData name is parsed as rule text, so the content of every included file
@@ -468,9 +476,20 @@ func validateRuleText(rules string) ([]string, error) {
 			continue
 		}
 		target := includeTarget(match[1])
+		// Coraza expands a glob from the untrimmed argument, so a padded glob
+		// matches nothing and compiles a zero-rule WAF without an error. It
+		// trims only the literal name it opens, so a padded non-glob resolves
+		// normally.
+		if strings.Contains(target, "*") {
+			if target != strings.TrimSpace(target) {
+				return nil, errors.New(`Include of a glob must not be padded: Coraza expands the glob before trimming, so padding makes it match nothing; use ` + allowedIncludeTargets)
+			}
+		} else {
+			target = strings.TrimSpace(target)
+		}
 		switch {
 		case strings.ContainsAny(target, `"'`):
-			return nil, errors.New(`Include target must not contain quotes: only one matched pair of double quotes around the whole target is stripped, use ` + allowedIncludeTargets)
+			return nil, errors.New(`Include target must not contain quotes: only double quotes around the whole target are stripped, use ` + allowedIncludeTargets)
 		case isOSPath(target):
 			return nil, errors.New(`Include with an absolute or parent-relative path is not allowed: use ` + allowedIncludeTargets)
 		case nonRuleCrsTarget(target):

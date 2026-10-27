@@ -80,19 +80,20 @@ references before an Engine accepts the configuration:
   rules); either way the Engine reports `Ready` while the plugin rejects the
   push or enforces nothing. Any other extension is rejected too, including for a
   literal `crs/<file>` target.
-  The argument may be unquoted or wrapped in one matched pair of double quotes,
-  as Coraza strips only that pair: a single-quoted or half-quoted target is
-  rejected, because the plugin would read the quote as part of the file name.
-  The guard resolves the target the way Coraza does: it trims the argument, so
-  extra spaces or a tab before the name resolve to that file and its content is
-  scanned. A target that still carries a quote after the one matched pair of
-  double quotes Coraza strips is rejected, because the plugin would read the
-  quote as part of the file name.
-  A glob is accepted only as the exact `@owasp_crs/*.conf`, one segment after the
-  alias: the plugin expands it against the embedded CRS tree, and Coraza only logs
-  an empty glob result instead of failing, so the operator cannot tell whether a
-  narrower or broader pattern matches rule files (`@owasp_crs/REQUEST-*.conf`
-  compiles rules), nothing at all (`@owasp_crs/NOSUCH-*.conf`), non-rule files
+  The argument may be unquoted or wrapped in double quotes: Coraza strips every
+  leading and trailing `"` from a wholly quoted argument of at least three bytes,
+  and nothing else. A single-quoted or half-quoted target is rejected, because
+  the plugin would read the quote as part of the file name.
+  A non-glob target is trimmed like Coraza trims the name it opens, so extra
+  spaces or a tab before the name resolve to that file and its content is
+  scanned. A glob is not trimmed: Coraza expands it with the argument as written,
+  so a padded glob matches nothing.
+  A glob is accepted only as the exact unpadded `@owasp_crs/*.conf`, one segment
+  after the alias: the plugin expands it against the embedded CRS tree, and Coraza
+  only logs an empty glob result instead of failing, so the operator cannot tell
+  whether a narrower or broader pattern matches rule files
+  (`@owasp_crs/REQUEST-*.conf` compiles rules), nothing at all
+  (`@owasp_crs/NOSUCH-*.conf` or a padded pattern), non-rule files
   (`@owasp_crs/*.data`, which NACKs), or a directory the plugin does not have
   (`@owasp_crs/crs/*.conf`, `@owasp_crs/*/*.conf`): each would either NACK the
   push or enforce nothing while the Engine reports `Ready`.

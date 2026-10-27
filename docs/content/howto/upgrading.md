@@ -60,16 +60,19 @@ A literal `@owasp_crs/<file>` or `crs/<file>` must end in `.conf`: the
 `.conf.example` templates hold no active rules, so including one compiled a
 zero-rule WAF, and the `.data` files are not SecLang, so including one made the
 plugin NACK the push while the Engine reported `Ready`. An `Include` argument may
-also be unquoted or wrapped in one matched pair of double quotes only, as Coraza
-strips just that pair: a single-quoted or half-quoted target named a different
-file, building either an empty WAF or a NACK. The guard resolves the target the
-way Coraza does: it trims the argument, so extra spaces or a tab before the name
-resolve to that file and its content is scanned. A target that still carries a
-quote after the one matched pair of double quotes Coraza strips is rejected,
-because Coraza reads the quote as part of the file name. Without those
-rejections the Engine reported `Ready` while the plugin either enforced nothing
-or kept rejecting the configuration. A RuleSet whose rules `Include` a RuleData
-file name containing `/` is rejected as well.
+also be unquoted or wrapped in double quotes: Coraza strips every leading and
+trailing `"` from a wholly quoted argument of at least three bytes, and nothing
+else. A single-quoted or half-quoted target named a different file, building
+either an empty WAF or a NACK, so a target that still carries a quote after that
+is rejected. A non-glob target is trimmed, so extra spaces or a tab before the
+name resolve to that file and its content is scanned. A glob is not trimmed:
+Coraza expands it with the argument as written, so a padded glob matches
+nothing. `Include  @owasp_crs/*.conf` and `Include "@owasp_crs/*.conf "` therefore
+compiled a zero-rule WAF while the Engine reported `Ready`, and only the exact
+unpadded `@owasp_crs/*.conf` is accepted. Without those rejections the Engine
+reported `Ready` while the plugin either enforced nothing or kept rejecting the
+configuration. A RuleSet whose rules `Include` a RuleData file name containing
+`/` is rejected as well.
 
 ## RuleData Size Limits
 
