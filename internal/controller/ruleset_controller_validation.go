@@ -28,7 +28,9 @@ const (
 // RuleSet status was patched to Degraded. Reconcile should stop without error.
 var errRuleSetRulesInvalid = errors.New("aggregated rules failed Coraza validation")
 
-// validateAggregatedRules validates the aggregated rule set via Coraza.
+// validateAggregatedRules compiles the aggregated rule set with Coraza. The
+// caller has already run the directive and Include guard
+// (validation.ValidateIncludes), which must also cover accepted content.
 // Sets Degraded status and emits Warning events on failure.
 // The returned duration covers Coraza parsing only (not status patches).
 func (r *RuleSetReconciler) validateAggregatedRules(
@@ -36,27 +38,32 @@ func (r *RuleSetReconciler) validateAggregatedRules(
 	log logr.Logger,
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
-	rules string,
-	dataFiles map[string][]byte,
 	conf coraza.WAFConfig,
 ) (time.Duration, error) {
 	start := time.Now()
-	err := validation.ValidateIncludes(rules, dataFiles)
-	if err == nil {
-		_, err = coraza.NewWAF(conf)
-	}
-	if err != nil {
-		d := time.Since(start)
-		if isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation) {
-			return d, errRuleSetRulesInvalid
-		}
-		msg := fmt.Sprintf("Ruleset is invalid\n%v", validation.SanitizeErrorMessage(err))
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
-			return d, patchErr
-		}
-		return d, errRuleSetRulesInvalid
+	if _, err := coraza.NewWAF(conf); err != nil {
+		return time.Since(start), r.markRulesInvalid(ctx, log, req, ruleset, err)
 	}
 	return time.Since(start), nil
+}
+
+// markRulesInvalid patches Degraded (unless the condition is already current)
+// and returns errRuleSetRulesInvalid so the caller stops reconciling.
+func (r *RuleSetReconciler) markRulesInvalid(
+	ctx context.Context,
+	log logr.Logger,
+	req ctrl.Request,
+	ruleset *wafv1alpha1.RuleSet,
+	cause error,
+) error {
+	if isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation) {
+		return errRuleSetRulesInvalid
+	}
+	msg := fmt.Sprintf("Ruleset is invalid\n%v", validation.SanitizeErrorMessage(cause))
+	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
+		return patchErr
+	}
+	return errRuleSetRulesInvalid
 }
 
 // rejectUnsupportedRules checks rules for IDs unsupported in WASM mode.

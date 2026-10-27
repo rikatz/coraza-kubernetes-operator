@@ -214,6 +214,23 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	// The directive and Include guard is cheap and runs before the accepted
+	// fast path: content accepted by an older build may still carry a host
+	// writing directive or an alias the plugin cannot resolve. Such a RuleSet
+	// would stay Ready while the Engine keeps publishing a payload the plugin
+	// NACKs forever.
+	guardStart := time.Now()
+	if guardErr := validation.ValidateIncludes(content.Rules, content.DataFiles); guardErr != nil {
+		if err := r.markRulesInvalid(ctx, log, req, &ruleset, guardErr); !errors.Is(err, errRuleSetRulesInvalid) {
+			return ctrl.Result{}, err
+		}
+		if !alreadyInvalid {
+			r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
+			r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", assembleDur+time.Since(guardStart))
+		}
+		return ctrl.Result{}, nil
+	}
+
 	alreadyAccepted := isConditionCurrent(ruleset.Status.Conditions, conditionReady, ruleSetReadyReasonRulesAccepted, ruleset.Generation) &&
 		isRuleSetContentAccepted(&ruleset, contentHash)
 	if alreadyAccepted {
@@ -234,7 +251,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
 
 	conf := validation.BuildWAFConfig(content.Rules, content.DataFiles)
-	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, content.Rules, content.DataFiles, conf)
+	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, conf)
 	if err != nil {
 		if errors.Is(err, errRuleSetRulesInvalid) {
 			if !alreadyInvalid {

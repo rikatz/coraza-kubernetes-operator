@@ -31,6 +31,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
@@ -165,4 +167,125 @@ func TestHostWritingDirectiveInIncludedRuleDataBlocksAcceptance(t *testing.T) {
 	assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
 	assert.Contains(t, degraded.Message, "SecDebugLog")
 	assert.NotContains(t, degraded.Message, marker)
+}
+
+// TestLegacyAcceptedContentIsRevalidatedOnUpgrade covers a RuleSet whose
+// content an older build accepted. The accepted fast path must still run the
+// directive and Include guard: otherwise the RuleSet stays Ready, the Engine
+// keeps publishing, and the plugin NACKs every push after the upgrade.
+func TestLegacyAcceptedContentIsRevalidatedOnUpgrade(t *testing.T) {
+	tests := []struct {
+		name  string
+		rules string
+		want  string
+	}{
+		{name: "host writing directive", rules: "SecRuleEngine On\nSecDebugLog /dev/stdout", want: "SecDebugLog"},
+		{name: "unresolvable alias", rules: "SecRuleEngine On\nInclude @notanalias", want: "@owasp_crs/<path>"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			source := utils.NewTestRuleSource("legacy-accepted-source", testNamespace, tc.rules)
+			// The old build validated this fragment before the guard existed,
+			// so its status is Ready for the current generation.
+			apimeta.SetStatusCondition(&source.Status.Conditions, metav1.Condition{
+				Type:               conditionReady,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: source.Generation,
+				Reason:             ruleSourceReadyReasonValidated,
+				LastTransitionTime: metav1.Now(),
+			})
+			ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+				Name:      "legacy-accepted-ruleset",
+				Namespace: testNamespace,
+				Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
+			})
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&wafv1alpha1.RuleSet{}, &wafv1alpha1.Engine{}).
+				WithObjects(ruleset, source).
+				Build()
+
+			// Record accepted content as the old build would: matching hash,
+			// Ready, and a current observed generation.
+			var current wafv1alpha1.RuleSet
+			require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(ruleset), &current))
+			inputs, err := loadRuleSetInputs(ctx, c, &current)
+			require.NoError(t, err)
+			content, err := assemble.Assemble(inputs)
+			require.NoError(t, err)
+			hash, err := render.RuleSetContentHash(content)
+			require.NoError(t, err)
+
+			patch := client.MergeFrom(current.DeepCopy())
+			current.Status.AcceptedContent = &wafv1alpha1.RuleSetAcceptedContent{
+				ObservedGeneration: current.Generation,
+				ContentHash:        hash,
+			}
+			apimeta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+				Type:               conditionReady,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: current.Generation,
+				Reason:             ruleSetReadyReasonRulesAccepted,
+				LastTransitionTime: metav1.Now(),
+			})
+			require.NoError(t, c.Status().Patch(ctx, &current, patch))
+
+			metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
+			require.NoError(t, err)
+			ruleSetReconciler := &RuleSetReconciler{
+				Client:   c,
+				Scheme:   scheme,
+				Recorder: utils.NewTestRecorder(),
+				Metrics:  metrics,
+			}
+
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleset)}
+			_, err = ruleSetReconciler.Reconcile(ctx, req)
+			require.NoError(t, err)
+
+			var updated wafv1alpha1.RuleSet
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
+			degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+			require.NotNil(t, degraded)
+			assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+			assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
+			assert.Contains(t, degraded.Message, tc.want)
+
+			ready := apimeta.FindStatusCondition(updated.Status.Conditions, conditionReady)
+			require.NotNil(t, ready)
+			assert.Equal(t, metav1.ConditionFalse, ready.Status, "a re-rejected RuleSet must not stay Ready")
+
+			engine := utils.NewTestEngine(utils.EngineOptions{
+				Name:        "legacy-accepted-engine",
+				Namespace:   testNamespace,
+				GatewayName: "legacy-accepted-gw",
+				RuleSetName: ruleset.Name,
+				WasmURL:     utils.DefaultTestWasmURL,
+				WasmSHA256:  utils.DefaultTestWasmSHA256,
+			})
+			require.NoError(t, c.Create(ctx, engine))
+
+			engineReconciler := &EngineReconciler{
+				Client:       c,
+				Scheme:       scheme,
+				Recorder:     utils.NewTestRecorder(),
+				assetBaseURL: testAssetBaseURL,
+				xdsConfig:    testXDSConfig(),
+			}
+			engineReq := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+			_, err = engineReconciler.provisionWasmDriver(ctx, logr.Discard(), engineReq, engine)
+			require.NoError(t, err)
+
+			var updatedEngine wafv1alpha1.Engine
+			require.NoError(t, c.Get(ctx, engineReq.NamespacedName, &updatedEngine))
+			assert.Nil(t, updatedEngine.Status.AcceptedConfiguration, "the Engine must not publish a re-rejected RuleSet")
+			progressing := apimeta.FindStatusCondition(updatedEngine.Status.Conditions, conditionProgressing)
+			require.NotNil(t, progressing)
+			assert.Equal(t, reasonAwaitingRuleSetAcceptance, progressing.Reason)
+		})
+	}
 }
