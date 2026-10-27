@@ -132,7 +132,6 @@ func TestRequestBodyInspection(t *testing.T) {
 	s.Step("deploy rules for body inspection")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
-SecDebugLog /dev/stdout
 SecRequestBodyAccess On
 SecRequestBodyLimit 13107200
 SecRequestBodyNoFilesLimit 131072
@@ -189,7 +188,7 @@ func TestRequestHeaderInspection(t *testing.T) {
 	s.Step("deploy rules for header inspection")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
-SecDebugLog /dev/stdout`)
+`)
 	s.CreateRuleSource(ns, "header-rules", `
 SecRule REQUEST_HEADERS:User-Agent "@contains sqlmap" "id:7001,phase:1,deny,status:403,msg:'SQLMap detected',log,auditlog"
 SecRule REQUEST_HEADERS:User-Agent "@contains nikto" "id:7002,phase:1,deny,status:403,msg:'Nikto scanner detected',log,auditlog"

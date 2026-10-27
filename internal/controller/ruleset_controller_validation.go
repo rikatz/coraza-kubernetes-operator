@@ -37,10 +37,11 @@ func (r *RuleSetReconciler) validateAggregatedRules(
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
 	rules string,
+	dataFiles map[string][]byte,
 	conf coraza.WAFConfig,
 ) (time.Duration, error) {
 	start := time.Now()
-	err := validation.ValidateIncludes(rules)
+	err := validation.ValidateIncludes(rules, dataFiles)
 	if err == nil {
 		_, err = coraza.NewWAF(conf)
 	}

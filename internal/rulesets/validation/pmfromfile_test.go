@@ -73,6 +73,42 @@ func TestValidatePMFromFileData(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
+	// Coraza path-cleans the argument, so a leading ./ must resolve the same
+	// RuleData file instead of being rejected.
+	for _, argument := range []string{"./overlap.data", ".//overlap.data"} {
+		t.Run("pmf "+argument+" resolves the clean name", func(t *testing.T) {
+			assert.NoError(t, ValidatePMFromFileData(
+				`SecRule ARGS "@pmf `+argument+`" "id:1,phase:1,pass"`,
+				map[string][]byte{"overlap.data": []byte("a")},
+			))
+			err := ValidatePMFromFileData(
+				`SecRule ARGS "@pmf `+argument+`" "id:1,phase:1,pass"`,
+				map[string][]byte{"other.data": []byte("a")},
+			)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "overlap.data")
+		})
+	}
+
+	// The plugin serves the embedded CRS tree, so crs/... targets do not need
+	// RuleData. A typo there is a delivery risk the operator cannot verify.
+	t.Run("pmf embedded crs data is accepted without RuleData", func(t *testing.T) {
+		for _, dataFiles := range []map[string][]byte{nil, {}, {"other.data": []byte("x")}} {
+			assert.NoError(t, ValidatePMFromFileData(
+				`SecRule ARGS "@pmf crs/restricted-files.data" "id:1,phase:1,pass"`,
+				dataFiles,
+			))
+		}
+	})
+
+	t.Run("pmf traversal out of the embedded crs tree still needs RuleData", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			`SecRule ARGS "@pmf crs/../../etc/passwd" "id:1,phase:1,pass"`,
+			map[string][]byte{},
+		)
+		require.Error(t, err)
+	})
+
 	populatedData := map[string][]byte{"overlap.data": []byte("x")}
 
 	for _, operator := range []string{"@pmFromFile", "@pmf"} {

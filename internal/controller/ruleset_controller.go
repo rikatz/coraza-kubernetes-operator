@@ -234,7 +234,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
 
 	conf := validation.BuildWAFConfig(content.Rules, content.DataFiles)
-	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, content.Rules, conf)
+	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, content.Rules, content.DataFiles, conf)
 	if err != nil {
 		if errors.Is(err, errRuleSetRulesInvalid) {
 			if !alreadyInvalid {

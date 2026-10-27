@@ -112,3 +112,57 @@ func TestReservedDataFileNameBlocksAcceptance(t *testing.T) {
 	require.NotNil(t, progressing)
 	assert.Equal(t, reasonAwaitingRuleSetAcceptance, progressing.Reason)
 }
+
+// TestHostWritingDirectiveInIncludedRuleDataBlocksAcceptance covers an Include
+// of a RuleData file whose content is parsed as rule text: the aggregate
+// validation must reject a host-writing directive hidden there.
+func TestHostWritingDirectiveInIncludedRuleDataBlocksAcceptance(t *testing.T) {
+	ctx := context.Background()
+
+	const marker = "included-data-marker-83cf"
+	data := utils.NewTestRuleData("debug-data", testNamespace, map[string]string{
+		"bad.data": "SecDebugLog /dev/shm/" + marker + ".log\n",
+	})
+	source := utils.NewTestRuleSource("debug-source", testNamespace, "Include bad.data")
+	apimeta.SetStatusCondition(&source.Status.Conditions, metav1.Condition{
+		Type:               conditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: source.Generation,
+		Reason:             ruleSourceReadyReasonValidated,
+		LastTransitionTime: metav1.Now(),
+	})
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "debug-ruleset",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
+		Data:      []wafv1alpha1.DataReference{{Name: data.Name}},
+	})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&wafv1alpha1.RuleSet{}, &wafv1alpha1.RuleData{}, &wafv1alpha1.Engine{}).
+		WithObjects(ruleset, source, data).
+		Build()
+
+	metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	ruleSetReconciler := &RuleSetReconciler{
+		Client:   c,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Metrics:  metrics,
+	}
+
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleset)}
+	_, err = ruleSetReconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	var updated wafv1alpha1.RuleSet
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
+	require.Nil(t, updated.Status.AcceptedContent, "rules that write host files must not be accepted")
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
+	assert.Contains(t, degraded.Message, "SecDebugLog")
+	assert.NotContains(t, degraded.Message, marker)
+}

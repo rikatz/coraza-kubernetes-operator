@@ -41,7 +41,6 @@ func TestSQLInjectionPatterns(t *testing.T) {
 	s.Step("deploy SQL injection detection rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
-SecDebugLog /dev/stdout
 SecRequestBodyAccess On`)
 
 	// Comprehensive SQLi detection rules
@@ -123,7 +122,6 @@ func TestXSSPatterns(t *testing.T) {
 	s.Step("deploy XSS detection rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
-SecDebugLog /dev/stdout
 SecRequestBodyAccess On`)
 
 	s.CreateRuleSource(ns, "xss-rules", `
@@ -203,7 +201,7 @@ func TestPathTraversal(t *testing.T) {
 	s.Step("deploy path traversal detection rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
-SecDebugLog /dev/stdout`)
+`)
 
 	s.CreateRuleSource(ns, "traversal-rules", `
 # Basic path traversal
@@ -269,7 +267,6 @@ func TestCommandInjection(t *testing.T) {
 	s.Step("deploy command injection detection rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
-SecDebugLog /dev/stdout
 SecRequestBodyAccess On`)
 
 	s.CreateRuleSource(ns, "cmdi-rules", `
@@ -339,7 +336,7 @@ func TestProtocolAttacks(t *testing.T) {
 	s.Step("deploy protocol attack detection rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
-SecDebugLog /dev/stdout`)
+`)
 
 	s.CreateRuleSource(ns, "protocol-rules", `
 # HTTP response splitting

@@ -346,27 +346,90 @@ func TestValidateIncludes(t *testing.T) {
 		"Include /var/run/secrets/kubernetes.io/serviceaccount/token",
 		"Include ../etc/passwd",
 		"Include ..",
+		"Include SomeData/../../../etc/passwd",
+		"Include data/../../etc/passwd",
+		`Include SomeData\..\..\..\etc\passwd`,
 		`Include C:\Windows\win.ini`,
 		"Include /etc/passwd /etc/shadow",
 		"Include \\\n/etc/passwd",
 		"SecRuleEngine On\ninclude '/etc/passwd'",
 	} {
 		t.Run(rules, func(t *testing.T) {
-			require.Error(t, ValidateIncludes(rules), "an OS path include must be rejected")
+			require.Error(t, ValidateIncludes(rules, nil), "an OS path include must be rejected")
 		})
 	}
 
 	for _, rules := range []string{
 		"Include @recommended-conf",
+		"Include @demo-conf",
+		"Include @ftw-conf",
+		"Include @crs-setup-conf",
+		"Include @owasp_crs",
 		"Include @owasp_crs/*.conf",
 		"Include @owasp_crs/REQUEST-900-INITIALIZATION.conf",
 		"Include some.data",
+		"Include ./some.data",
 		"SecRuleEngine On\nSecRule ARGS \"@rx x\" \"id:1,phase:1,pass\"",
+		"SecDebugLogLevel 9",
+		"SecAuditLog /tmp/audit.log\nSecAuditLogType Serial",
 	} {
 		t.Run(rules, func(t *testing.T) {
-			assert.NoError(t, ValidateIncludes(rules))
+			assert.NoError(t, ValidateIncludes(rules, nil))
 		})
 	}
+}
+
+// TestValidateIncludesRejectsUnknownAliases covers the alias allowlist: an
+// alias the plugin does not resolve makes the plugin NACK every push while the
+// Engine looks Ready, so it must fail validation instead.
+func TestValidateIncludesRejectsUnknownAliases(t *testing.T) {
+	for _, target := range []string{
+		"@notanalias",
+		"@",
+		"@crs-setup",
+		"@OWASP_CRS/REQUEST-900-INITIALIZATION.conf",
+		"@owasp_crsx/open.conf",
+		"@owasp_crs/../setup.conf",
+		"@recommended-conf-extra",
+	} {
+		t.Run(target, func(t *testing.T) {
+			err := ValidateIncludes("Include "+target, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "@owasp_crs/...", "the error must name the allowed aliases")
+			assert.NotContains(t, err.Error(), "notanalias")
+		})
+	}
+
+	// Documented trade: the operator cannot verify the embedded file list, so a
+	// wrong file under @owasp_crs/ passes validation and NACKs in the plugin.
+	assert.NoError(t, ValidateIncludes("Include @owasp_crs/typo.conf", nil))
+}
+
+// TestValidateIncludesRejectsHostWritingDirectives covers the directives that
+// make Coraza create or append host files while compiling a WAF. The error must
+// be static: tenant-controlled paths and rule content stay out of status.
+func TestValidateIncludesRejectsHostWritingDirectives(t *testing.T) {
+	const marker = "tenant-path-marker-7b1d"
+	for _, rules := range []string{
+		"SecDebugLog /dev/stdout",
+		"SecDebugLog /dev/shm/" + marker + ".log",
+		"SecDebugLogLevel 9\nSecDebugLog /dev/stdout",
+		"secdebuglog /dev/stdout",
+		"SecUploadDir /dev/shm/" + marker,
+		"SecUploadKeepFiles On",
+		"SecUploadKeepFiles Off",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			err := ValidateIncludes(rules, nil)
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), marker)
+			assert.NotContains(t, err.Error(), "/dev/")
+			assert.NotContains(t, err.Error(), "shm")
+		})
+	}
+
+	assert.NoError(t, ValidateIncludes("SecDebugLogLevel 9", nil))
+	assert.NoError(t, ValidateIncludes("SecDebugLog2 /dev/stdout", nil))
 }
 
 func TestValidateRuleSourceRulesAcceptsRuntimeAliases(t *testing.T) {
@@ -375,6 +438,7 @@ func TestValidateRuleSourceRulesAcceptsRuntimeAliases(t *testing.T) {
 		"Include @demo-conf",
 		"Include @ftw-conf",
 		"Include @crs-setup-conf",
+		"Include @owasp_crs",
 		"SecRuleEngine On\nInclude @crs-setup-conf\nInclude @owasp_crs/*.conf",
 		"Include @owasp_crs/REQUEST-900-INITIALIZATION.conf",
 	} {
@@ -383,4 +447,77 @@ func TestValidateRuleSourceRulesAcceptsRuntimeAliases(t *testing.T) {
 			assert.NoError(t, ValidateRuleSourceRules(include, "alias-rs", map[string][]byte{}))
 		})
 	}
+}
+
+// TestValidateRuleSourceRulesRejectsUnknownAlias covers the RuleSource entry
+// point: an alias the plugin cannot resolve must fail before the Engine looks
+// Ready and the plugin NACKs.
+func TestValidateRuleSourceRulesRejectsUnknownAlias(t *testing.T) {
+	err := ValidateRuleSourceRules("Include @notanalias", "alias-rs", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "alias-rs")
+	assert.Contains(t, err.Error(), "@owasp_crs/...")
+	assert.NotContains(t, err.Error(), "notanalias")
+}
+
+// TestValidateRuleSourceRulesRejectsDebugLog covers the RuleSource entry point:
+// SecDebugLog must not reach NewWAF, which opens the path on the host.
+func TestValidateRuleSourceRulesRejectsDebugLog(t *testing.T) {
+	const marker = "probe-debug-marker-56af"
+	debugLog := filepath.Join(t.TempDir(), marker+".log")
+
+	err := ValidateRuleSourceRules(
+		"SecRuleEngine On\nSecDebugLogLevel 9\nSecDebugLog "+debugLog,
+		"debug-rs", nil,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "debug-rs")
+	assert.NotContains(t, err.Error(), marker, "the error must not echo the tenant path")
+
+	_, statErr := os.Stat(debugLog)
+	assert.True(t, os.IsNotExist(statErr), "rejected rules must not create the debug log on the host")
+}
+
+// TestValidateIncludesScansIncludedDataFiles covers a RuleData file that the
+// rule text Includes: Coraza parses an included file as rule text, so a
+// host-writing directive hidden there must be rejected too.
+func TestValidateIncludesScansIncludedDataFiles(t *testing.T) {
+	const marker = "data-content-marker-2c94"
+	dataFiles := map[string][]byte{
+		"bad.data": []byte("SecDebugLog /dev/shm/" + marker + "\n"),
+	}
+
+	err := ValidateIncludes("Include bad.data", dataFiles)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bad.data")
+	assert.NotContains(t, err.Error(), marker)
+
+	err = ValidateRuleSourceRules("Include bad.data", "data-rs", dataFiles)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data-rs")
+	assert.NotContains(t, err.Error(), marker)
+
+	assert.NoError(t, ValidateIncludes("Include good.data", map[string][]byte{
+		"good.data": []byte("word\nother-word\n"),
+	}))
+}
+
+// TestBuildWAFConfigSecDebugLogWritesHostFile documents why SecDebugLog is
+// rejected: the validation WAF itself opens the tenant path on the host.
+func TestBuildWAFConfigSecDebugLogWritesHostFile(t *testing.T) {
+	debugLog := filepath.Join(t.TempDir(), "debug.log")
+	_, err := coraza.NewWAF(BuildWAFConfig("SecDebugLog "+debugLog+"\nSecDebugLogLevel 9", nil))
+	require.NoError(t, err)
+
+	_, statErr := os.Stat(debugLog)
+	assert.NoError(t, statErr, "without the validation guard Coraza creates the debug log on the host")
+}
+
+// TestBuildWAFConfigStubsEmbeddedCRSData covers the embedded CRS data a tenant
+// references from its own rules: the plugin serves crs/... from its module, so
+// the validation WAF must not fail on it.
+func TestBuildWAFConfigStubsEmbeddedCRSData(t *testing.T) {
+	_, err := coraza.NewWAF(BuildWAFConfig(
+		"SecRule ARGS \"@pmf crs/restricted-files.data\" \"id:1,phase:1,pass\"", nil))
+	require.NoError(t, err)
 }

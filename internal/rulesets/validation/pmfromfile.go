@@ -18,6 +18,7 @@ package validation
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -50,6 +51,15 @@ func joinActiveRuleLines(rules string) string {
 	return b.String()
 }
 
+// isEmbeddedDataPath reports whether a @pmFromFile target is served by the
+// plugin's embedded rules tree (the CRS data files that sit next to the
+// included CRS rules) rather than by RuleData. The operator cannot verify the
+// embedded file list, so a typo there is a delivery risk, not a validation
+// error.
+func isEmbeddedDataPath(name string) bool {
+	return strings.HasPrefix(name, "crs/")
+}
+
 // ValidatePMFromFileData ensures every @pmFromFile reference has a matching
 // key in dataFiles (RuleSet-merged RuleData). Coraza may otherwise resolve
 // files from the operator process working directory, which is unsafe and
@@ -68,8 +78,12 @@ func ValidatePMFromFileData(aggregatedRules string, dataFiles map[string][]byte)
 		if len(strings.Fields(argument)) > 1 {
 			return fmt.Errorf("%s %s: expected a single data file name, but Coraza treats the whole argument as one file name", operator, argument)
 		}
-		basename := strings.Trim(argument, `"'`)
-		if basename == "" {
+		// Coraza path-cleans the argument, so ./a.data resolves to a.data.
+		basename := path.Clean(strings.Trim(argument, `"'`))
+		if basename == "" || basename == "." {
+			continue
+		}
+		if isEmbeddedDataPath(basename) {
 			continue
 		}
 		if dataFiles == nil {

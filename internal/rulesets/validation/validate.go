@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -40,15 +41,17 @@ const validationTrailer = "\nSecAuditLogType Serial\nSecAuditLog /dev/null"
 // always in-memory. Coraza falls back to io.OSFS when no root is set, so tenant
 // rule text could otherwise read operator files (an Include of the ServiceAccount
 // token leaks it through the compilation error into tenant-readable status).
-// Runtime include aliases are stubbed so Coraza does not reject what the plugin
-// resolves from its embedded filesystem.
+// Runtime include aliases and embedded CRS data files are stubbed so Coraza
+// does not reject what the plugin resolves from its embedded filesystem.
 func BuildWAFConfig(rules string, dataFiles map[string][]byte) coraza.WAFConfig {
 	mfs := memfs.NewMemFS()
 	for name, data := range dataFiles {
 		mfs.WriteFile(name, data)
 	}
-	for _, target := range runtimeIncludeTargets(rules) {
-		mfs.WriteFile(target, nil)
+	for _, target := range append(runtimeIncludeTargets(rules), embeddedDataTargets(rules)...) {
+		if _, ok := dataFiles[target]; !ok {
+			mfs.WriteFile(target, nil)
+		}
 	}
 	return coraza.NewWAFConfig().WithDirectives(rules + validationTrailer).WithRootFS(mfs)
 }
@@ -64,6 +67,22 @@ func runtimeIncludeTargets(rules string) []string {
 		}
 		target := strings.Trim(strings.TrimSpace(match[1]), `"'`)
 		if isRuntimeResolvedPath(target) && !strings.Contains(target, "*") {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
+// embeddedDataTargets returns the @pmFromFile targets the plugin resolves from
+// its embedded CRS tree, so validation can stub them.
+func embeddedDataTargets(rules string) []string {
+	var targets []string
+	for _, match := range pmFromFilePattern.FindAllStringSubmatch(joinActiveRuleLines(rules), -1) {
+		if len(match) < 3 {
+			continue
+		}
+		target := path.Clean(strings.Trim(strings.TrimSpace(match[2]), `"'`))
+		if isEmbeddedDataPath(target) {
 			targets = append(targets, target)
 		}
 	}
@@ -91,28 +110,37 @@ func ExtractMissingFileBasename(err error) (string, bool) {
 }
 
 // isRuntimeResolvedPath reports whether the plugin's embedded filesystem
-// resolves the path at runtime: @owasp_crs, @crs-setup-conf, @recommended-conf,
-// @demo-conf and @ftw-conf. The operator cannot resolve them, so it must accept
-// them.
+// resolves the path at runtime. Only these aliases are resolvable there: any
+// other @-prefixed target passes validation but makes the plugin NACK every
+// push, which the operator cannot report because the Engine looks Ready.
+// @owasp_crs/<file> is accepted as a whole: the operator cannot verify the
+// embedded file list, so a typo there is a documented delivery risk.
 func isRuntimeResolvedPath(path string) bool {
-	return strings.HasPrefix(path, "@")
+	switch path {
+	case "@recommended-conf", "@demo-conf", "@ftw-conf", "@crs-setup-conf", "@owasp_crs":
+		return true
+	}
+	return strings.HasPrefix(path, "@owasp_crs/")
 }
 
 // isOSPath reports whether path addresses the operator's filesystem instead of
-// a RuleData file name (absolute, parent-relative, Windows volume or UNC). Such
-// paths are always rejected: only RuleData names and runtime aliases may be
-// referenced.
+// a RuleData file name (absolute, parent-relative anywhere in the path, Windows
+// volume or UNC). Such paths are always rejected: only RuleData names and
+// runtime aliases may be referenced.
 func isOSPath(path string) bool {
 	if path == "" {
 		return false
 	}
-	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\`) {
+	p := strings.ReplaceAll(path, `\`, "/")
+	if strings.HasPrefix(p, "/") || (len(p) >= 2 && p[1] == ':') { // /... or C:\...
 		return true
 	}
-	if len(path) >= 2 && path[1] == ':' { // C:\... or C:/...
-		return true
+	for elem := range strings.SplitSeq(p, "/") {
+		if elem == ".." {
+			return true
+		}
 	}
-	return path == ".." || strings.HasPrefix(path, "../")
+	return false
 }
 
 // SanitizeErrorMessage replaces filesystem paths in missing-file errors with
@@ -154,23 +182,58 @@ func ShouldSkipMissingFileError(err error, dataFiles map[string][]byte) bool {
 // text already normalised by joinActiveRuleLines.
 var includePattern = regexp.MustCompile(`(?i)^include[ \t]+(.+)$`)
 
+// forbiddenDirectivePattern matches directives that make Coraza open or create a
+// host file while compiling a WAF, regardless of the in-memory root filesystem.
+// SecDebugLogLevel is deliberately not matched: it only sets a verbosity and
+// opens nothing. SecAuditLog and SecAuditLogType are allowed because
+// validationTrailer overrides them to /dev/null.
+var forbiddenDirectivePattern = regexp.MustCompile(`(?i)^(secdebuglog|secuploaddir|secuploadkeepfiles)(?:[ \t]|$)`)
+
+// allowedIncludeTargets lists the reference forms a tenant may use. It is
+// static so neither a rejected path nor rule content can leak into status.
+const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-setup-conf, @owasp_crs/... or a RuleData file name"
+
 // ValidateIncludes rejects Include targets that address the operator
-// filesystem. The validation WAF has an in-memory root, so such a path cannot
-// resolve anyway; rejecting it here keeps the error honest and independent of
-// the missing-file skip that defers RuleData names to aggregate validation.
-// Runtime aliases (@owasp_crs/..., @crs-setup-conf, ...) are accepted because
-// the plugin resolves them from its embedded filesystem.
-func ValidateIncludes(rules string) error {
+// filesystem, unresolvable aliases, and directives that write host files. The
+// validation WAF has an in-memory root, so such a path cannot resolve anyway;
+// rejecting it here keeps the error honest and independent of the missing-file
+// skip that defers RuleData names to aggregate validation. Runtime aliases
+// (@owasp_crs/..., @crs-setup-conf, ...) are accepted because the plugin
+// resolves them from its embedded filesystem.
+//
+// dataFiles are the RuleData files merged for the RuleSet. An Include of a
+// RuleData name is parsed as rule text, so their content is scanned too; pass
+// nil on the RuleSource path, which has no merged data.
+func ValidateIncludes(rules string, dataFiles map[string][]byte) error {
+	if err := validateRuleText(rules); err != nil {
+		return err
+	}
+	for name, data := range dataFiles {
+		if err := validateRuleText(string(data)); err != nil {
+			return fmt.Errorf("included RuleData file %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// validateRuleText rejects the directives and Include targets a tenant rule
+// text (or an included data file) may not use.
+func validateRuleText(rules string) error {
 	for line := range strings.SplitSeq(joinActiveRuleLines(rules), "\n") {
+		if match := forbiddenDirectivePattern.FindStringSubmatch(line); match != nil {
+			return fmt.Errorf("%s is not allowed: rule validation must not write host files", match[1])
+		}
 		match := includePattern.FindStringSubmatch(line)
 		if match == nil {
 			continue
 		}
 		target := strings.Trim(strings.TrimSpace(match[1]), `"'`)
-		if isRuntimeResolvedPath(target) || !isOSPath(target) {
-			continue
+		switch {
+		case isOSPath(target):
+			return errors.New(`Include with an absolute or parent-relative path is not allowed: use ` + allowedIncludeTargets)
+		case strings.HasPrefix(target, "@") && !isRuntimeResolvedPath(target):
+			return errors.New(`Include alias is not resolved by the plugin: use ` + allowedIncludeTargets)
 		}
-		return errors.New(`Include with an absolute or parent-relative path is not allowed: use @owasp_crs/..., @crs-setup-conf, @recommended-conf, @demo-conf, @ftw-conf or a RuleData file name`)
 	}
 	return nil
 }
@@ -185,7 +248,7 @@ func ValidateRuleSourceRules(rules, ruleSourceName string, dataFiles map[string]
 	if IsPatchOnlyFragment(rules) {
 		return nil
 	}
-	if err := ValidateIncludes(rules); err != nil {
+	if err := ValidateIncludes(rules, dataFiles); err != nil {
 		return fmt.Errorf("RuleSource %s doesn't contain valid rules: %w", ruleSourceName, err)
 	}
 	if _, err := coraza.NewWAF(BuildWAFConfig(rules, dataFiles)); err != nil {

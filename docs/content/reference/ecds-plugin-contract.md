@@ -65,6 +65,35 @@ Rules for both sides:
   `plugin.manifest.yaml` (`schema_version`, module name, file, sha256, git SHA,
   Coraza version, proxy-wasm SDK version). CKO bundles exactly these bytes and manifest.
 
+## Rule text references
+
+Rule text may reference only what both sides can resolve. The operator validates these
+references before an Engine accepts the configuration:
+
+- `Include` targets: `@recommended-conf`, `@demo-conf`, `@ftw-conf`,
+  `@crs-setup-conf`, `@owasp_crs` (the whole tree, e.g. `@owasp_crs/*.conf`), and bare
+  RuleData file names. Any other `@`-prefixed target is rejected with the list of
+  allowed aliases, because the plugin cannot resolve it and would NACK every push.
+- `@pmFromFile` / `@pmf` targets: a RuleData file name, or `crs/...` for the CRS data
+  files the plugin serves from its embedded tree. A leading `./` is ignored, as Coraza
+  path-cleans the argument.
+- Directives that open or create host files during compilation are rejected:
+  `SecDebugLog`, `SecUploadDir`, and `SecUploadKeepFiles`. This covers rule text and any
+  RuleData file the rules `Include` (an included file is parsed as rule text).
+  `SecDebugLogLevel`, `SecAuditLog`, and `SecAuditLogType` are accepted; the plugin
+  routes debug output to its proxy logs and the operator's validation WAF pins the
+  audit log to `/dev/null`.
+
+Known trades of this contract:
+
+- The operator cannot verify the embedded file list. A wrong file under `@owasp_crs/`
+  (for example `@owasp_crs/typo.conf`) or under `crs/` passes validation, the Engine
+  reports `Ready`, and the plugin NACKs the push; the stream stays fail-closed and the
+  operator logs the retry budget being exhausted. Use the `@owasp_crs/*.conf` glob to
+  refer to the whole CRS tree, which cannot name a missing file.
+- `Include` targets are matched by form, not by existence: a bare RuleData name is
+  accepted here and checked by aggregate RuleSet validation against the merged files.
+
 ## Cold start
 
 A proxy caches the module by `sha256` and fetches it only when it first applies a
