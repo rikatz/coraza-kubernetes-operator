@@ -474,11 +474,51 @@ func TestValidateIncludes(t *testing.T) {
 	}
 }
 
+// TestValidateIncludesQuotesMirrorCoraza covers the quoting of the Include
+// argument. Coraza trims the line and strips one matched pair of double quotes
+// around the whole argument, never a single quote (internal/seclang/parser.go).
+// The guard must resolve the target the same way: any other quoting names a
+// different file in the plugin, which then builds a zero-rule WAF or NACKs.
+func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
+	const marker = "tenant-quote-marker-3e81"
+	for _, rules := range []string{
+		"Include '@owasp_crs/*.conf'",
+		"Include @owasp_crs/*.conf'",
+		"SecRuleEngine On\nInclude \"@owasp_crs/*.conf",
+		"Include ''@owasp_crs/*.conf''",
+		"Include 'blocklist.conf'",
+		"Include \"" + marker + ".conf\"'",
+		"Include \"\"",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			err := ValidateIncludes(rules, map[string][]byte{})
+			require.Error(t, err, "a quote Coraza does not strip must not pass the guard")
+			assert.Contains(t, err.Error(), "quote")
+			assert.NotContains(t, err.Error(), marker, "the error must stay static")
+		})
+	}
+
+	for _, rules := range []string{
+		"Include \"@owasp_crs/*.conf\"",
+		"Include @owasp_crs/*.conf",
+		"Include \"@crs-setup-conf\"",
+		"Include \"blocklist.conf\"",
+		"Include blocklist.conf",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			assert.NoError(t, ValidateIncludes(rules, map[string][]byte{}),
+				"unquoted and matched-double-quoted targets are what Coraza resolves")
+		})
+	}
+}
+
 // TestValidateIncludesRejectsUnresolvableGlobs covers globs the plugin cannot
-// guarantee to match. Only the exact @owasp_crs/*.conf is accepted: Coraza logs
-// an empty glob result instead of failing, so any narrower pattern that matches
-// nothing would compile a zero-rule WAF, and a nested glob names a directory the
-// plugin does not have. A root-level glob matches nothing in either filesystem.
+// guarantee to match. Only the exact @owasp_crs/*.conf is accepted: the operator
+// cannot enumerate the embedded tree, so a narrower pattern may match rule files
+// (@owasp_crs/REQUEST-*.conf) or nothing at all (@owasp_crs/NOSUCH-*.conf, a
+// zero-rule WAF), a broader one also matches the .data files and NACKs, and a
+// nested glob names a directory the plugin does not have. A root-level glob
+// matches nothing in either filesystem.
 func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 	for _, target := range []string{
 		"@owasp_crs/*",
@@ -505,16 +545,26 @@ func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 	}
 }
 
-// TestValidateIncludesRejectsNonRuleCrsFiles covers literal @owasp_crs/ paths
-// that name a file which is not a rule file: the .conf.example templates hold
-// no active rules and the .data files are not SecLang. Coraza reports neither,
-// so the Engine would be Ready on a zero-rule WAF that enforces nothing.
+// TestValidateIncludesRejectsNonRuleCrsFiles covers literal CRS-tree paths that
+// name a file which is not rule text: the .conf.example templates hold no active
+// rules (a zero-rule WAF) and the .data files fail to parse as SecLang
+// ("unknown directive", so the plugin NACKs the push). Coraza reports neither as
+// a rule-loading problem, so the Engine was Ready while the plugin rejected the
+// push or enforced nothing.
 func TestValidateIncludesRejectsNonRuleCrsFiles(t *testing.T) {
 	for _, target := range []string{
 		"@owasp_crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example",
 		"@owasp_crs/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example",
 		"@owasp_crs/restricted-files.data",
 		"@owasp_crs/REQUEST-901-INITIALIZATION.txt",
+		"crs/scanners-user-agents.data",
+		"crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example",
+		// The plugin cleans the path, so a leading ./ reaches the same file.
+		"./crs/scanners-user-agents.data",
+		"./@owasp_crs/restricted-files.data",
+		// The crs directory itself is not a file either.
+		"crs",
+		"crs/",
 	} {
 		t.Run(target, func(t *testing.T) {
 			for _, dataFiles := range []map[string][]byte{nil, {}} {
@@ -527,9 +577,11 @@ func TestValidateIncludesRejectsNonRuleCrsFiles(t *testing.T) {
 		})
 	}
 
-	// A real embedded rule file and the glob stay accepted.
+	// A real embedded rule file, the glob and a bare RuleData name stay accepted.
 	assert.NoError(t, ValidateIncludes("Include @owasp_crs/REQUEST-901-INITIALIZATION.conf", nil))
 	assert.NoError(t, ValidateIncludes("Include @owasp_crs/*.conf", nil))
+	assert.NoError(t, ValidateIncludes("Include crs/REQUEST-901-INITIALIZATION.conf", nil))
+	assert.NoError(t, ValidateIncludes("Include blocklist.data", nil), "a bare RuleData name is deferred")
 }
 
 // TestValidateRuleSourceRulesRejectsNonRuleCrsFile covers the RuleSource entry
