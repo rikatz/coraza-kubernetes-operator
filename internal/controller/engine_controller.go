@@ -375,7 +375,10 @@ func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logge
 
 	msg := fmt.Sprintf("RuleSet %s is degraded: %s", engine.Spec.RuleSet.Name, degradedCond.Message)
 	logInfo(log, req, "Engine", "RuleSet is degraded; marking Engine degraded", "ruleSet", engine.Spec.RuleSet.Name)
-	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetDegraded", msg, func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
+	// A degraded RuleSet is often a wait state (RuleData not found yet). Keep
+	// the accepted record: the previous snapshot keeps serving and the
+	// publication readiness deadline is the safety net if it never recovers.
+	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetDegraded", msg); patchErr != nil {
 		return true, patchErr
 	}
 

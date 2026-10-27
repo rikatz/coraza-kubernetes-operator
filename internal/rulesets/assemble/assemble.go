@@ -49,6 +49,10 @@ const maxDataFileNameBytes = 253
 // so a legacy object with thousands of bad names cannot overflow them.
 const maxReportedDataFiles = 5
 
+// maxReportedDataFileNameBytes bounds each quoted name, so one legacy
+// multi-megabyte key cannot overflow the condition or readiness text.
+const maxReportedDataFileNameBytes = 64
+
 // embeddedDataFiles are served by the plugin's embedded filesystem. That tree
 // is merged first, so a RuleData file with one of these names is accepted and
 // then silently ignored.
@@ -57,6 +61,12 @@ var embeddedDataFiles = map[string]struct{}{
 	"coraza-demo.conf":             {},
 	"ftw-config.conf":              {},
 	"crs-setup.conf.example":       {},
+	// The plugin's include aliases resolve to the files above.
+	"@recommended-conf": {},
+	"@demo-conf":        {},
+	"@ftw-conf":         {},
+	"@crs-setup-conf":   {},
+	"@owasp_crs":        {},
 }
 
 const (
@@ -174,9 +184,9 @@ func validateReferences(in Inputs) error {
 		for name := range data.Files {
 			switch {
 			case name == "." || len(name) > maxDataFileNameBytes || !fs.ValidPath(name):
-				invalid = append(invalid, fmt.Sprintf("%q (RuleData %s)", name, data.Name))
+				invalid = append(invalid, fmt.Sprintf("%q (RuleData %s)", truncateDataFileName(name), data.Name))
 			case shadowsEmbeddedFile(name):
-				shadowed = append(shadowed, fmt.Sprintf("%q (RuleData %s)", name, data.Name))
+				shadowed = append(shadowed, fmt.Sprintf("%q (RuleData %s)", truncateDataFileName(name), data.Name))
 			}
 		}
 	}
@@ -201,7 +211,17 @@ func shadowsEmbeddedFile(name string) bool {
 	if _, ok := embeddedDataFiles[name]; ok {
 		return true
 	}
-	return name == "crs" || strings.HasPrefix(name, "crs/")
+	return name == "crs" || strings.HasPrefix(name, "crs/") ||
+		name == "@owasp_crs" || strings.HasPrefix(name, "@owasp_crs/")
+}
+
+// truncateDataFileName keeps status messages bounded for legacy keys that
+// predate the API's 253-byte name cap.
+func truncateDataFileName(name string) string {
+	if len(name) <= maxReportedDataFileNameBytes {
+		return name
+	}
+	return name[:maxReportedDataFileNameBytes] + "..."
 }
 
 func summarizeDataFiles(entries []string) string {

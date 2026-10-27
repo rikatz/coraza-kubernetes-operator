@@ -316,19 +316,54 @@ func TestAssembleRejectsEmbeddedDataFileNames(t *testing.T) {
 	assert.NotContains(t, err.Error(), "ok.data")
 }
 
+func TestAssembleRejectsPluginAliasDataFileNames(t *testing.T) {
+	assembleWith := func(files map[string]string) error {
+		_, err := assemble.Assemble(assemble.Inputs{
+			Sources: []assemble.SourceInput{{Name: "rules", Rules: "SecRuleEngine On"}},
+			Data:    []assemble.DataInput{{Name: "legacy-data", Files: files}},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "shadow embedded plugin files")
+		assert.NotContains(t, err.Error(), "ok.data")
+		return err
+	}
+
+	err := assembleWith(map[string]string{
+		"@recommended-conf": "x",
+		"@demo-conf":        "x",
+		"@ftw-conf":         "x",
+		"@crs-setup-conf":   "x",
+		"ok.data":           "x",
+	})
+	for _, alias := range []string{"@recommended-conf", "@demo-conf", "@ftw-conf", "@crs-setup-conf"} {
+		assert.Contains(t, err.Error(), `"`+alias+`" (RuleData legacy-data)`)
+	}
+
+	err = assembleWith(map[string]string{
+		"@owasp_crs": "x",
+		"@owasp_crs/REQUEST-900-INITIALIZATION.conf": "x",
+		"ok.data": "x",
+	})
+	assert.Contains(t, err.Error(), `"@owasp_crs" (RuleData legacy-data)`)
+	assert.Contains(t, err.Error(), `"@owasp_crs/REQUEST-900-INITIALIZATION.conf" (RuleData legacy-data)`)
+}
+
 func TestAssembleCapsReportedInvalidDataFileNames(t *testing.T) {
 	files := make(map[string]string, 100)
 	for i := range 100 {
 		files[fmt.Sprintf("../bad-%03d", i)] = "x"
 	}
+	files[strings.Repeat("-", 1<<20)] = "x"
 	_, err := assemble.Assemble(assemble.Inputs{
 		Sources: []assemble.SourceInput{{Name: "rules", Rules: "SecRuleEngine On"}},
 		Data:    []assemble.DataInput{{Name: "data", Files: files}},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "and 95 more")
+	assert.Contains(t, err.Error(), "and 96 more")
 	assert.NotContains(t, err.Error(), "../bad-099")
-	assert.Less(t, len(err.Error()), 512)
+	assert.Contains(t, err.Error(), `"`+strings.Repeat("-", 64)+`..."`, "each reported name must be truncated")
+	assert.NotContains(t, err.Error(), strings.Repeat("-", 65))
+	assert.Less(t, len(err.Error()), 2048)
 }
 
 func TestAssembleRejectsEmptyAndOversizedDataFileNames(t *testing.T) {
@@ -346,5 +381,6 @@ func TestAssembleRejectsEmptyAndOversizedDataFileNames(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "spec.data contains invalid data file name(s)")
 	assert.Contains(t, err.Error(), `"" (RuleData data)`)
-	assert.Contains(t, err.Error(), `"`+strings.Repeat("a", 254)+`" (RuleData data)`)
+	assert.Contains(t, err.Error(), `"`+strings.Repeat("a", 64)+`..." (RuleData data)`)
+	assert.NotContains(t, err.Error(), strings.Repeat("a", 254))
 }

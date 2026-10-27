@@ -191,6 +191,14 @@ func TestPublicationReadinessDeadlineBoundsPendingRecords(t *testing.T) {
 	if got := testutil.ToFloat64(metrics.coldReconstruction); got != 1 {
 		t.Fatalf("cold reconstruction counter = %v after a second check, want 1", got)
 	}
+
+	// A later failure of the same Engine must not count the cold record again.
+	if readiness.RecordFailure("shop", "stuck", errors.New("still stuck")) {
+		t.Fatal("RecordFailure() = true after the deadline expired the record")
+	}
+	if got := testutil.ToFloat64(metrics.coldReconstruction); got != 1 {
+		t.Fatalf("cold reconstruction counter = %v after a post-deadline failure, want 1", got)
+	}
 }
 
 // TestPublicationReadinessResolvedRecordIgnoresDeadline checks that a record

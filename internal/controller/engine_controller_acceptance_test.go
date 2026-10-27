@@ -36,6 +36,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
@@ -583,6 +584,55 @@ func TestEngineReconciler_ClearsAcceptedConfigurationWhenRuleSetUIDChanges(t *te
 	readiness := xds.NewPublicationReadiness()
 	readiness.Initialize([]*wafv1alpha1.Engine{&updated})
 	assert.NoError(t, readiness.Check(), "a cleared record must not gate readiness")
+}
+
+// TestEngineReconciler_KeepsAcceptedConfigurationWhenRuleDataIsMissing covers a
+// transient RuleSet wait state: losing RuleData must not destroy the working
+// accepted configuration and published snapshot.
+func TestEngineReconciler_KeepsAcceptedConfigurationWhenRuleDataIsMissing(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+	engine := newDeliveryLimitEngineFixture(t, ctx, ns, "data-wait")
+	reconciler := newAcceptedEngineTestReconciler()
+	reconcileEngine(t, ctx, reconciler, engine)
+
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+	var accepted wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &accepted))
+	require.NotNil(t, accepted.Status.AcceptedConfiguration, "the fixture must be accepted first")
+
+	var ruleSet wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: engine.Spec.RuleSet.Name}, &ruleSet))
+	require.Len(t, ruleSet.Spec.Data, 1)
+
+	var data wafv1alpha1.RuleData
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: ruleSet.Spec.Data[0].Name}, &data))
+	require.NoError(t, k8sClient.Delete(ctx, &data))
+
+	// The RuleSet enters its RuleData wait state.
+	ruleSetReconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+	}
+	_, err := ruleSetReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&ruleSet)})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(&ruleSet), &ruleSet))
+	degradedRuleSet := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degradedRuleSet)
+	require.Equal(t, "RuleDataNotFound", degradedRuleSet.Reason)
+
+	_, err = reconciler.Reconcile(ctx, request)
+	require.NoError(t, err)
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &updated))
+	assert.NotNil(t, updated.Status.AcceptedConfiguration,
+		"a RuleData wait state must keep the working accepted configuration")
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Equal(t, "RuleSetDegraded", degraded.Reason)
 }
 
 func TestEngineReconciler_AcceptsConfigurationAndAttachesEnvoyFilter(t *testing.T) {

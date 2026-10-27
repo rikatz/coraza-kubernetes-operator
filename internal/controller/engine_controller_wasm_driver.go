@@ -270,18 +270,15 @@ func ruleSetAcceptancePending(ruleSet *wafv1alpha1.RuleSet) (string, bool) {
 }
 
 // acceptedRecordUnjustified reports whether the accepted configuration was
-// accepted for a different RuleSet object, or the referenced RuleSet is
-// degraded. The accepted record can then never be reconstructed from the
-// current definition, so it must not keep gating readiness.
+// accepted for a different RuleSet object. Only that makes the record
+// un-reconstructable by definition; a degraded RuleSet may be a wait state
+// (RuleData not found yet), so it keeps the record and leaves the readiness
+// deadline as the safety net.
 func acceptedRecordUnjustified(engine *wafv1alpha1.Engine, ruleSet *wafv1alpha1.RuleSet) bool {
 	if engine.Status == nil || engine.Status.AcceptedConfiguration == nil {
 		return false
 	}
-	if engine.Status.AcceptedConfiguration.RuleSetUID != string(ruleSet.UID) {
-		return true
-	}
-	degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
-	return degraded != nil && degraded.Status == metav1.ConditionTrue && degraded.ObservedGeneration == ruleSet.Generation
+	return engine.Status.AcceptedConfiguration.RuleSetUID != string(ruleSet.UID)
 }
 
 // awaitRuleSetAcceptance marks the Engine Progressing and requeues until the

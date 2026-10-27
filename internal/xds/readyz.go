@@ -227,7 +227,8 @@ func (p *PublicationReadiness) deadlinePassed() bool {
 
 // reportExpired stops the remaining pending records from gating readiness and
 // reports each one once. This is the last resort for an accepted record this
-// build can never reconstruct.
+// build can never reconstruct. The map is cleared so a later failure of the
+// same Engine is no longer counted as a cold reconstruction.
 func (p *PublicationReadiness) reportExpired() {
 	if p.expired {
 		return
@@ -244,6 +245,7 @@ func (p *PublicationReadiness) reportExpired() {
 			"engine", key, "reason", p.pending[key])
 		p.Metrics.ColdReconstructionFailure()
 	}
+	p.pending = make(map[string]string)
 }
 
 // PublicationStartup waits for the informer cache, records the startup Engine
