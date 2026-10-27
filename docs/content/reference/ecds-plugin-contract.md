@@ -74,17 +74,23 @@ references before an Engine accepts the configuration:
   `@crs-setup-conf`, `@owasp_crs/*.conf`, a literal `@owasp_crs/<file>.conf`, and
   bare RuleData file names. The `<file>` must have a non-empty first segment, no
   empty segments, no `.` or `..` segments, and a literal must end in `.conf`: the
-  other files in the embedded tree are not rule files. The `.conf.example`
-  templates hold no active rules and the `.data` files are not SecLang, and Coraza
-  reports neither, so including them compiles a zero-rule WAF while the Engine
-  reports `Ready`. Any other extension is rejected too. A glob is accepted only
-  as the exact `@owasp_crs/*.conf`, one segment after the alias: the plugin
-  expands it against the embedded CRS tree, and Coraza only logs an empty glob
-  result instead of failing, so a narrower pattern (`@owasp_crs/REQUEST-*.conf`,
-  `@owasp_crs/NOSUCH-*.conf`), a broader one (`@owasp_crs/*`), one matching
-  non-rule files (`@owasp_crs/*.data`), or one nested a directory deeper
-  (`@owasp_crs/crs/*.conf`, `@owasp_crs/*/*.conf`) would compile a zero-rule WAF
-  and still report `Ready`.
+  other files in the embedded tree are not rule text. Coraza fails to parse the
+  `.data` files (`unknown directive`, so the plugin NACKs the push) and the
+  `.conf.example` templates hold no active rules (so the WAF compiles with zero
+  rules); either way the Engine reports `Ready` while the plugin rejects the
+  push or enforces nothing. Any other extension is rejected too, including for a
+  literal `crs/<file>` target.
+  The argument may be unquoted or wrapped in one matched pair of double quotes,
+  as Coraza strips only that pair: a single-quoted or half-quoted target is
+  rejected, because the plugin would read the quote as part of the file name.
+  A glob is accepted only as the exact `@owasp_crs/*.conf`, one segment after the
+  alias: the plugin expands it against the embedded CRS tree, and Coraza only logs
+  an empty glob result instead of failing, so the operator cannot tell whether a
+  narrower or broader pattern matches rule files (`@owasp_crs/REQUEST-*.conf`
+  compiles rules), nothing at all (`@owasp_crs/NOSUCH-*.conf`), non-rule files
+  (`@owasp_crs/*.data`, which NACKs), or a directory the plugin does not have
+  (`@owasp_crs/crs/*.conf`, `@owasp_crs/*/*.conf`): each would either NACK the
+  push or enforce nothing while the Engine reports `Ready`.
   The bare `@owasp_crs`, the trailing-slash, `.` and double-slash variants name the
   embedded directory rather than a file and are rejected, as is any other
   `@`-prefixed target: the plugin cannot resolve them.

@@ -53,7 +53,19 @@ This release rejects rule text that opens or creates host files while the operat
 
 `SecAuditLog` is now accepted only with `/dev/stdout` or `/dev/stderr`. Any other target made the plugin NACK the configuration (the WASM sandbox cannot open files), so the Engine reported `Ready` without a working WAF. `SecAuditLogType` is still accepted.
 
-The same guard rejects `Include` targets the plugin cannot resolve: unknown `@` aliases, globs outside the exact `@owasp_crs/*.conf` form (including nested forms such as `@owasp_crs/crs/*.conf`), and globs in a non-final `@owasp_crs/` segment. A literal `@owasp_crs/<file>` must end in `.conf`: the `.conf.example` templates hold no active rules and the `.data` files are not SecLang, and including either built a zero-rule WAF. A RuleSet whose rules `Include` a RuleData file name containing `/` is rejected as well. Such a glob accepted the configuration but left the WAF with zero rules, so the Engine reported `Ready` without enforcing anything.
+The same guard rejects `Include` targets the plugin cannot resolve: unknown `@`
+aliases, globs outside the exact `@owasp_crs/*.conf` form (including nested forms
+such as `@owasp_crs/crs/*.conf`), and globs in a non-final `@owasp_crs/` segment.
+A literal `@owasp_crs/<file>` or `crs/<file>` must end in `.conf`: the
+`.conf.example` templates hold no active rules, so including one compiled a
+zero-rule WAF, and the `.data` files are not SecLang, so including one made the
+plugin NACK the push while the Engine reported `Ready`. An `Include` argument may
+also be unquoted or wrapped in one matched pair of double quotes only, as Coraza
+strips just that pair: a single-quoted or half-quoted target named a different
+file, building either an empty WAF or a NACK. Without those rejections the Engine
+reported `Ready` while the plugin either enforced nothing or kept rejecting the
+configuration. A RuleSet whose rules `Include` a RuleData file name containing
+`/` is rejected as well.
 
 ## RuleData Size Limits
 
