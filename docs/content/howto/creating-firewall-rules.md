@@ -82,7 +82,7 @@ The order of entries in `spec.sources` matters. Rules are concatenated in that o
 
 ## Live rule updates
 
-When you change a **RuleSource** the RuleSet controller reconciles, re-compiles, and updates the cache. Engines polling the cache pick up the new rules at their configured poll interval.
+When you change a **RuleSource** the RuleSet controller reconciles, re-compiles, and updates the cache.
 
 ```bash
 kubectl edit rulesource sqli-rules -n my-namespace

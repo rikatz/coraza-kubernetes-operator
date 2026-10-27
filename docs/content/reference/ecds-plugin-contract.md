@@ -54,9 +54,11 @@ Rules for both sides:
   WAF. It performs no network call and starts no timers or tickers.
 - Failure policy mapping: `fail` -> native `FAIL_CLOSED` + plugin block-on-error;
   `allow` -> native `FAIL_OPEN` + plugin allow-on-error.
-- Size limits are enforced before allocation: `max_payload_bytes`, `max_decoded_bytes`,
-  `max_data_files`, `max_filename_len`. Values are operator configuration and are not
-  part of this payload.
+- Size limits are enforced before allocation: `max_payload_bytes` (16 MiB),
+  `max_decoded_bytes` (12 MiB), `max_data_files` (4096), `max_filename_len` (253).
+  These are compile-time plugin caps as well as operator configuration: the operator
+  rejects flags above them at startup, and the plugin NACKs any payload above them.
+  They are not part of this payload.
 - An explicitly allowed empty ruleset is an intentional no-op WAF, not a missing
   configuration.
 - Release artifacts: raw `plugin.wasm`, `plugin.wasm.sha256` (lowercase hex),
