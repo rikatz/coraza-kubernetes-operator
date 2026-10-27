@@ -359,7 +359,7 @@ func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logge
 		if apierrors.IsNotFound(err) {
 			msg := fmt.Sprintf("RuleSet %s not found", engine.Spec.RuleSet.Name)
 			logInfo(log, req, "Engine", "RuleSet not found; marking Engine degraded", "ruleSet", engine.Spec.RuleSet.Name)
-			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetNotFound", msg); patchErr != nil {
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetNotFound", msg, func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
 				return true, patchErr
 			}
 			return true, nil
@@ -375,7 +375,7 @@ func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logge
 
 	msg := fmt.Sprintf("RuleSet %s is degraded: %s", engine.Spec.RuleSet.Name, degradedCond.Message)
 	logInfo(log, req, "Engine", "RuleSet is degraded; marking Engine degraded", "ruleSet", engine.Spec.RuleSet.Name)
-	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetDegraded", msg); patchErr != nil {
+	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetDegraded", msg, func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
 		return true, patchErr
 	}
 

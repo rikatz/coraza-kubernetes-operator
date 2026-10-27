@@ -506,6 +506,85 @@ func TestEngineReconciler_ClearsAcceptedConfigurationOverLimits(t *testing.T) {
 	assert.NoError(t, readiness.Check(), "a cleared record must not gate readiness")
 }
 
+// TestEngineReconciler_ClearsAcceptedConfigurationWhenRuleSetDeleted covers the
+// tenant deleting the RuleSet after acceptance: the accepted record can never be
+// reconstructed, so it must be cleared instead of gating readiness forever.
+func TestEngineReconciler_ClearsAcceptedConfigurationWhenRuleSetDeleted(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+	engine := newDeliveryLimitEngineFixture(t, ctx, ns, "ruleset-deleted")
+	reconciler := newAcceptedEngineTestReconciler()
+	reconcileEngine(t, ctx, reconciler, engine)
+
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+	var accepted wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &accepted))
+	require.NotNil(t, accepted.Status.AcceptedConfiguration)
+
+	var ruleSet wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: engine.Spec.RuleSet.Name}, &ruleSet))
+	require.NoError(t, k8sClient.Delete(ctx, &ruleSet))
+
+	_, err := reconciler.Reconcile(ctx, request)
+	require.NoError(t, err)
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &updated))
+	assert.Nil(t, updated.Status.AcceptedConfiguration, "the stale accepted record must be cleared")
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+	assert.Equal(t, "RuleSetNotFound", degraded.Reason)
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, conditionReady)
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+
+	readiness := xds.NewPublicationReadiness()
+	readiness.Initialize([]*wafv1alpha1.Engine{&updated})
+	assert.NoError(t, readiness.Check(), "a cleared record must not gate readiness")
+}
+
+// TestEngineReconciler_ClearsAcceptedConfigurationWhenRuleSetUIDChanges covers
+// the tenant recreating the RuleSet: the new object has a different UID, so the
+// accepted record no longer describes the referenced definition.
+func TestEngineReconciler_ClearsAcceptedConfigurationWhenRuleSetUIDChanges(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+	engine := newDeliveryLimitEngineFixture(t, ctx, ns, "ruleset-recreated")
+	reconciler := newAcceptedEngineTestReconciler()
+	reconcileEngine(t, ctx, reconciler, engine)
+
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+	var accepted wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &accepted))
+	require.NotNil(t, accepted.Status.AcceptedConfiguration)
+
+	var old wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: engine.Spec.RuleSet.Name}, &old))
+	require.NoError(t, k8sClient.Delete(ctx, &old))
+
+	recreated := &wafv1alpha1.RuleSet{
+		ObjectMeta: metav1.ObjectMeta{Name: old.Name, Namespace: old.Namespace},
+		Spec:       old.Spec,
+	}
+	require.NoError(t, k8sClient.Create(ctx, recreated))
+	require.NotEqual(t, old.UID, recreated.UID, "the recreated RuleSet must have a new UID")
+
+	_, err := reconciler.Reconcile(ctx, request)
+	require.NoError(t, err)
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &updated))
+	assert.Nil(t, updated.Status.AcceptedConfiguration, "the stale accepted record must be cleared")
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, conditionReady)
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+
+	readiness := xds.NewPublicationReadiness()
+	readiness.Initialize([]*wafv1alpha1.Engine{&updated})
+	assert.NoError(t, readiness.Check(), "a cleared record must not gate readiness")
+}
+
 func TestEngineReconciler_AcceptsConfigurationAndAttachesEnvoyFilter(t *testing.T) {
 	ctx := context.Background()
 	ns := setupTestNamespace(t, ctx)

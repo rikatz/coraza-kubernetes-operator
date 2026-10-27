@@ -105,7 +105,7 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	if err := r.Get(ctx, types.NamespacedName{Namespace: engine.Namespace, Name: engine.Spec.RuleSet.Name}, &ruleSet); err != nil {
 		if apierrors.IsNotFound(err) {
 			msg := fmt.Sprintf("RuleSet %s not found", engine.Spec.RuleSet.Name)
-			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetNotFound", msg); patchErr != nil {
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetNotFound", msg, func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
 				return ctrl.Result{}, patchErr
 			}
 			return ctrl.Result{}, err
@@ -115,14 +115,19 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	}
 
 	if msg, ok := ruleSetAcceptancePending(&ruleSet); !ok {
-		return r.awaitRuleSetAcceptance(ctx, log, req, engine, msg)
+		return r.awaitRuleSetAcceptance(ctx, log, req, engine, msg, acceptedRecordUnjustified(engine, &ruleSet))
 	}
 	acceptedContentHash := ruleSet.Status.AcceptedContent.ContentHash
 
 	logDebug(log, req, "Engine", "Assembling accepted RuleSet content")
 	inputs, err := loadRuleSetInputs(ctx, r.Client, &ruleSet)
 	if err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetInputsUnavailable", fmt.Sprintf("Failed to load RuleSet inputs: %v", err)); patchErr != nil {
+		var clear []func()
+		if apierrors.IsNotFound(err) {
+			// The accepted record cannot be reconstructed without its inputs.
+			clear = append(clear, func() { clearAcceptedConfiguration(engine) })
+		}
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetInputsUnavailable", fmt.Sprintf("Failed to load RuleSet inputs: %v", err), clear...); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
@@ -140,7 +145,7 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	}
 	if contentHash != acceptedContentHash {
 		msg := fmt.Sprintf("RuleSet %s accepted content hash %s, assembled content is %s", ruleSet.Name, acceptedContentHash, contentHash)
-		return r.awaitRuleSetAcceptance(ctx, log, req, engine, msg)
+		return r.awaitRuleSetAcceptance(ctx, log, req, engine, msg, acceptedRecordUnjustified(engine, &ruleSet))
 	}
 
 	// Accept only content the ECDS serving plane can deliver. Checking here
@@ -264,18 +269,41 @@ func ruleSetAcceptancePending(ruleSet *wafv1alpha1.RuleSet) (string, bool) {
 	return "", true
 }
 
+// acceptedRecordUnjustified reports whether the accepted configuration was
+// accepted for a different RuleSet object, or the referenced RuleSet is
+// degraded. The accepted record can then never be reconstructed from the
+// current definition, so it must not keep gating readiness.
+func acceptedRecordUnjustified(engine *wafv1alpha1.Engine, ruleSet *wafv1alpha1.RuleSet) bool {
+	if engine.Status == nil || engine.Status.AcceptedConfiguration == nil {
+		return false
+	}
+	if engine.Status.AcceptedConfiguration.RuleSetUID != string(ruleSet.UID) {
+		return true
+	}
+	degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
+	return degraded != nil && degraded.Status == metav1.ConditionTrue && degraded.ObservedGeneration == ruleSet.Generation
+}
+
 // awaitRuleSetAcceptance marks the Engine Progressing and requeues until the
-// RuleSet accepts content for its current generation.
-func (r *EngineReconciler) awaitRuleSetAcceptance(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine, message string) (ctrl.Result, error) {
+// RuleSet accepts content for its current generation. When clearAccepted is
+// set, the stale accepted record is dropped in the same patch.
+func (r *EngineReconciler) awaitRuleSetAcceptance(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine, message string, clearAccepted bool) (ctrl.Result, error) {
 	if engine.Status == nil {
 		engine.Status = &wafv1alpha1.EngineStatus{}
 	}
+	conditionStale := false
 	if current := apimeta.FindStatusCondition(engine.Status.Conditions, conditionProgressing); current == nil ||
 		current.Status != metav1.ConditionTrue ||
 		current.Reason != reasonAwaitingRuleSetAcceptance ||
 		current.ObservedGeneration != engine.Generation {
+		conditionStale = true
+	}
+	if conditionStale || (clearAccepted && engine.Status.AcceptedConfiguration != nil) {
 		patch := client.MergeFrom(engine.DeepCopy())
 		before := snapshotConditions(engine.Status.Conditions)
+		if clearAccepted {
+			clearAcceptedConfiguration(engine)
+		}
 		applyStatusProgressing(&engine.Status.Conditions, engine.Generation, reasonAwaitingRuleSetAcceptance, message)
 		if err := r.Status().Patch(ctx, engine, patch); err != nil {
 			logAPIError(log, req, "Engine", err, "Failed to patch status", engine)
