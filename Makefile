@@ -213,9 +213,14 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 # (schema-versioned payload with RuleData files); point WASM_PLUGIN_DIR at a
 # local worktree of it to build without publishing anything, e.g.:
 #   make demo WASM_PLUGIN_DIR=/path/to/coraza-proxy-wasm-ecds
+# The build runs from an archive of WASM_PLUGIN_VERSION inside a temporary
+# directory: the worktree is read-only for this target (no checkout, no new
+# files), so a local branch and its uncommitted work are left untouched.
 WASM_PLUGIN_REPO ?= https://github.com/corazawaf/coraza-proxy-wasm
-WASM_PLUGIN_VERSION ?= d62cf9b
+WASM_PLUGIN_VERSION ?= 31bca96
 WASM_PLUGIN_DIR ?= $(CURDIR)/.cache/coraza-proxy-wasm
+# Raw module produced by wasm.plugin (ignored by git, outside the plugin repo).
+WASM_MODULE_OUT ?= $(CURDIR)/.cache/wasm/main.wasm
 # TinyGo 0.34 supports Go 1.19-1.23 only; pin the toolchain the plugin builds with.
 WASM_GO_TOOLCHAIN ?= go1.23.12
 TINYGO ?= $(HOME)/bin/tinygocoraza/tinygo/bin/tinygo
@@ -235,11 +240,15 @@ wasm.plugin: ## Build the ECDS-aware coraza-proxy-wasm module (skipped when WASM
 		echo "wasm.plugin: fetching $(WASM_PLUGIN_VERSION)"; \
 		git -C "$(WASM_PLUGIN_DIR)" fetch --quiet --all --tags; \
 	fi; \
-	git -C "$(WASM_PLUGIN_DIR)" checkout --quiet "$(WASM_PLUGIN_VERSION)"; \
+	work=$$(mktemp -d); \
+	trap 'rm -rf "$$work"' EXIT; \
+	git -C "$(WASM_PLUGIN_DIR)" archive --format=tar "$(WASM_PLUGIN_VERSION)" | tar -x -C "$$work"; \
 	echo "wasm.plugin: building $(WASM_PLUGIN_VERSION) with $$($(TINYGO) version)"; \
-	cd "$(WASM_PLUGIN_DIR)" && \
+	cd "$$work" && \
 		PATH="$(dir $(TINYGO)):$$PATH" GOTOOLCHAIN="$(WASM_GO_TOOLCHAIN)" go run mage.go build; \
-	echo "wasm.plugin: $(WASM_PLUGIN_DIR)/build/main.wasm"
+	mkdir -p "$(dir $(WASM_MODULE_OUT))"; \
+	cp "$$work/build/main.wasm" "$(WASM_MODULE_OUT)"; \
+	echo "wasm.plugin: $(WASM_MODULE_OUT)"
 
 # ------------------------------------------------------------------------------
 # Deployment
@@ -694,7 +703,7 @@ observability.demo: observability.prometheus.deploy observability.operator.monit
 .PHONY: demo
 demo: ## Single command: build the WASM module, create KIND, deploy the operator and the demo rules
 	$(MAKE) wasm.plugin
-	$(MAKE) wasm.bundle WASM_MODULE=$(or $(WASM_MODULE),$(WASM_PLUGIN_DIR)/build/main.wasm)
+	$(MAKE) wasm.bundle WASM_MODULE=$(or $(WASM_MODULE),$(WASM_MODULE_OUT))
 	$(MAKE) wasm.verify
 	$(MAKE) cluster.kind
 	@# The chart reuses imagePullPolicy IfNotPresent, so restart the operator to run the image just loaded.

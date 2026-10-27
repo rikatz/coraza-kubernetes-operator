@@ -21,7 +21,9 @@ make demo WASM_PLUGIN_DIR=/path/to/coraza-proxy-wasm-ecds
 
 The default pinned plugin commit (`WASM_PLUGIN_VERSION`) is not published yet, so
 `make demo` without `WASM_PLUGIN_DIR` cannot clone it. Point `WASM_PLUGIN_DIR` at a
-sibling worktree on the `ecds/ecds-consumer` branch (Path B, RuleData delivery).
+sibling worktree on the `ecds/ecds-consumer` branch (Path B, RuleData delivery). The
+build runs from a temporary archive of the pinned commit, so your worktree is never
+checked out, detached, or written to; the module lands in `.cache/wasm/main.wasm`.
 
 It builds the plugin with TinyGo, bundles it into the operator image, creates the cluster
 with Istio (Sail operator), installs the operator, applies `config/samples`, and asserts that
@@ -36,7 +38,9 @@ a normal request passes while the demo attacks are blocked:
 Requirements: Docker, `kind`, `helm`, `kubectl`, and TinyGo 0.34 (`TINYGO=/path/to/tinygo`
 overrides the default `$HOME/bin/tinygocoraza/tinygo/bin/tinygo`). The first run downloads
 the Go 1.23 toolchain TinyGo needs. The built module replaces the fixture in
-`internal/assets`; restore it with `git checkout internal/assets`.
+`internal/assets`; restore it with `git checkout internal/assets`. That is the only file
+`make demo` changes in the operator checkout, and the plugin worktree is read-only for
+the build.
 
 The rest of this tutorial assumes you bring your own cluster.
 
