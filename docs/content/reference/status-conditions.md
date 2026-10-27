@@ -63,9 +63,10 @@ The Engine could not reach its desired state. Common reasons:
 | `NetworkPolicyFailed` | Failed to apply the NetworkPolicy that restricts access to the operator's xDS listener. | Check operator logs and RBAC permissions. |
 | `TLSNotConfigured` | The operator has no verified CA chain for its xDS serving certificate. | Set `--xds-ca-path` to the CA bundle Gateways use to verify the operator certificate. |
 
-When the Engine reports `InvalidRuleSet` from the delivery-limit check, `RenderFailed`
-for an oversized payload, or `RuleSetInputsUnavailable` for an input that no longer
-exists, the operator clears `status.acceptedConfiguration`. That removes the accepted
+When the Engine reports `InvalidRuleSet` (a RuleSet whose content the operator
+rejects as invalid, or one that exceeds the delivery limits), `RenderFailed` for an
+oversized payload, or `RuleSetInputsUnavailable` for an input that no longer exists,
+the operator clears `status.acceptedConfiguration`. That removes the accepted
 configuration from the ECDS serving plane, so the Gateway keeps the last snapshot it
 already received but no longer gets updates or restarts with WAF coverage until the
 Engine accepts a configuration again. Wait states (a degraded RuleSet that is only

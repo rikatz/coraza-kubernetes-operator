@@ -71,12 +71,16 @@ Rule text may reference only what both sides can resolve. The operator validates
 references before an Engine accepts the configuration:
 
 - `Include` targets: `@recommended-conf`, `@demo-conf`, `@ftw-conf`,
-  `@crs-setup-conf`, `@owasp_crs/*.conf`, a literal `@owasp_crs/<file>`, and bare
-  RuleData file names. The `<file>` must have a non-empty first segment, no empty
-  segments, and no `.` or `..` segments. A glob is accepted only as the exact
-  `@owasp_crs/*.conf`, one segment after the alias: the plugin expands it against
-  the embedded CRS tree, and Coraza only logs an empty glob result instead of
-  failing, so a narrower pattern (`@owasp_crs/REQUEST-*.conf`,
+  `@crs-setup-conf`, `@owasp_crs/*.conf`, a literal `@owasp_crs/<file>.conf`, and
+  bare RuleData file names. The `<file>` must have a non-empty first segment, no
+  empty segments, no `.` or `..` segments, and a literal must end in `.conf`: the
+  other files in the embedded tree are not rule files. The `.conf.example`
+  templates hold no active rules and the `.data` files are not SecLang, and Coraza
+  reports neither, so including them compiles a zero-rule WAF while the Engine
+  reports `Ready`. Any other extension is rejected too. A glob is accepted only
+  as the exact `@owasp_crs/*.conf`, one segment after the alias: the plugin
+  expands it against the embedded CRS tree, and Coraza only logs an empty glob
+  result instead of failing, so a narrower pattern (`@owasp_crs/REQUEST-*.conf`,
   `@owasp_crs/NOSUCH-*.conf`), a broader one (`@owasp_crs/*`), one matching
   non-rule files (`@owasp_crs/*.data`), or one nested a directory deeper
   (`@owasp_crs/crs/*.conf`, `@owasp_crs/*/*.conf`) would compile a zero-rule WAF
@@ -166,8 +170,8 @@ scoped to one resource per stream. Delta and ADS are out of scope.
 
 - Resource identity includes the Engine UID, so a recreated Engine never reuses a
   deleted Engine's cached configuration.
-- The ECDS `version_info` is the complete-resource content hash:
-  `sha256:<64 lowercase hexadecimal characters>`.
+- The ECDS `version_info` is the engine-version hash, not the hash of the rendered
+  resource: `sha256:<64 lowercase hexadecimal characters>`.
 - `ruleSetHash = sha256(canonical(rule text + sorted filename list + raw bytes))`.
 - The Engine version hashes schema and rendering versions, Engine identity, the RuleSet
   UID and content hash, failure and empty-rules policies, observability, binary URL and

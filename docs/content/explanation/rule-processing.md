@@ -49,7 +49,7 @@ This behavior can be overridden with the annotation `waf.k8s.coraza.io/skip-unsu
 
 ## Rule publication
 
-When rules are successfully compiled and validated, the operator renders an ECDS snapshot for every Engine bound to the RuleSet and streams it to Envoy. The snapshot version is the content hash, so it changes only when the aggregated rules or the RuleData files change.
+When rules are successfully compiled and validated, the operator renders an ECDS snapshot for every Engine bound to the RuleSet and streams it to Envoy. The snapshot version is the hash of the Engine-version input, not of the payload bytes: the schema and rendering versions, the Engine identity, the RuleSet UID and content hash, the failure and empty-rules policies, observability flags, the WASM binary URL and digest, and the VM settings. A rule or RuleData change moves it through the RuleSet content hash; an Engine or delivery setting change moves it too.
 
 Envoy applies a new snapshot in place: Gateway pods do not restart and the module bytes are not sent again. See [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}}) for the delivery details.
 

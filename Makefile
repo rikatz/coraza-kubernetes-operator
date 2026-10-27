@@ -222,6 +222,8 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 # work are left untouched. The commit must already exist there; commit a plugin
 # change and point WASM_PLUGIN_VERSION at it to build it.
 WASM_PLUGIN_REPO ?= https://github.com/corazawaf/coraza-proxy-wasm
+# 31bca96 is a local branch commit only: repin to the published commit when the
+# plugin PR lands, since a squash or rebase changes the hash.
 WASM_PLUGIN_VERSION ?= 31bca96
 WASM_PLUGIN_DIR ?= $(CURDIR)/.cache/coraza-proxy-wasm
 # Raw module produced by wasm.plugin (ignored by git, outside the plugin repo).
