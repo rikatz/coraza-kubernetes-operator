@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/corazawaf/coraza/v3"
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -41,6 +40,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 )
 
 // -----------------------------------------------------------------------------
@@ -233,12 +233,8 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
 
-	fsRules := getDataFilesystem(content.DataFiles)
-	conf := coraza.NewWAFConfig().WithDirectives(content.Rules)
-	if fsRules != nil {
-		conf = conf.WithRootFS(fsRules)
-	}
-	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, conf)
+	conf := validation.BuildWAFConfig(content.Rules, content.DataFiles)
+	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, content.Rules, conf)
 	if err != nil {
 		if errors.Is(err, errRuleSetRulesInvalid) {
 			if !alreadyInvalid {

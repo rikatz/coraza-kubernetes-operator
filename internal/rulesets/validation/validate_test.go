@@ -20,10 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
+	"github.com/corazawaf/coraza/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -172,27 +175,27 @@ func TestShouldSkipMissingFileError(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "nil secretData skips missing file (defer to aggregate)",
-			err:        &fs.PathError{Op: "open", Path: "/path/to/rule.data", Err: fs.ErrNotExist},
+			name:       "nil secretData skips a relative missing file (defer to aggregate)",
+			err:        &fs.PathError{Op: "open", Path: "rule.data", Err: fs.ErrNotExist},
 			secretData: nil,
 			want:       true,
 		},
 		{
 			name:       "basename found in secretData",
-			err:        &fs.PathError{Op: "open", Path: "/some/dir/rule.data", Err: fs.ErrNotExist},
+			err:        &fs.PathError{Op: "open", Path: "rule.data", Err: fs.ErrNotExist},
 			secretData: map[string][]byte{"rule.data": []byte("content")},
 			want:       true,
 		},
 		{
 			name: "wrapped PathError, basename found",
 			err: fmt.Errorf("outer: %w",
-				&fs.PathError{Op: "open", Path: "/x/y/z/found.data", Err: fs.ErrNotExist}),
+				&fs.PathError{Op: "open", Path: "found.data", Err: fs.ErrNotExist}),
 			secretData: map[string][]byte{"found.data": []byte("x")},
 			want:       true,
 		},
 		{
 			name:       "basename not in secretData",
-			err:        &fs.PathError{Op: "open", Path: "/path/to/missing.data", Err: fs.ErrNotExist},
+			err:        &fs.PathError{Op: "open", Path: "missing.data", Err: fs.ErrNotExist},
 			secretData: map[string][]byte{"other.data": []byte("content")},
 			want:       false,
 		},
@@ -210,9 +213,21 @@ func TestShouldSkipMissingFileError(t *testing.T) {
 		},
 		{
 			name:       "PathError with ErrPermission returns false",
-			err:        &fs.PathError{Op: "open", Path: "/path/to/file.data", Err: fs.ErrPermission},
+			err:        &fs.PathError{Op: "open", Path: "file.data", Err: fs.ErrPermission},
 			secretData: map[string][]byte{"file.data": []byte("x")},
 			want:       false,
+		},
+		{
+			name:       "runtime alias is skipped with nil dataFiles",
+			err:        &fs.PathError{Op: "open", Path: "@recommended-conf", Err: fs.ErrNotExist},
+			secretData: nil,
+			want:       true,
+		},
+		{
+			name:       "runtime alias is skipped with an empty data file map",
+			err:        &fs.PathError{Op: "open", Path: "@owasp_crs/REQUEST-900-INITIALIZATION.conf", Err: fs.ErrNotExist},
+			secretData: map[string][]byte{},
+			want:       true,
 		},
 	}
 
@@ -268,4 +283,104 @@ func TestValidateRuleSourceRules(t *testing.T) {
 		)
 		assert.NoError(t, err)
 	})
+}
+
+// TestValidateRuleSourceRulesCannotReadHostFiles covers the tenant-text escape
+// where Coraza's default io.OSFS read an operator file and its content leaked
+// through the compilation error into tenant-readable status.
+func TestValidateRuleSourceRulesCannotReadHostFiles(t *testing.T) {
+	const marker = "operator-secret-marker-4f2c"
+	secret := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(secret, []byte(marker+"\n"), 0o600))
+
+	for _, include := range []string{
+		"Include " + secret,
+		"Include /var/run/secrets/kubernetes.io/serviceaccount/token",
+		"Include /proc/self/environ",
+		"Include ../etc/passwd",
+		`Include C:\Windows\win.ini`,
+	} {
+		t.Run(include, func(t *testing.T) {
+			err := ValidateRuleSourceRules(include, "probe-rs", nil)
+			require.Error(t, err, "an OS path must be rejected, not silently skipped")
+			assert.Contains(t, err.Error(), "probe-rs")
+			assert.NotContains(t, err.Error(), marker, "the error must not contain file content")
+		})
+	}
+
+	t.Run("/proc/self/environ content is not disclosed", func(t *testing.T) {
+		t.Setenv("CKO_VALIDATION_PROBE", marker)
+		err := ValidateRuleSourceRules("Include /proc/self/environ", "environ-rs", nil)
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), marker)
+	})
+
+	// The same regression directly on the validation WAF: with an empty
+	// in-memory root, no directive may read an arbitrary OS file.
+	t.Run("validation WAF cannot read an existing OS file", func(t *testing.T) {
+		for _, rules := range []string{
+			"Include " + secret,
+			`SecRule ARGS "@pmFromFile ` + secret + `" "id:1,phase:1,pass"`,
+		} {
+			_, err := coraza.NewWAF(BuildWAFConfig(rules, nil))
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), marker)
+		}
+	})
+
+	t.Run("audit log configuration does not touch the host filesystem", func(t *testing.T) {
+		auditPath := filepath.Join(t.TempDir(), "audit.log")
+		err := ValidateRuleSourceRules(
+			"SecRuleEngine On\nSecAuditEngine On\nSecAuditLog "+auditPath+"\nSecAuditLogType Serial",
+			"audit-rs", nil,
+		)
+		require.NoError(t, err)
+		_, statErr := os.Stat(auditPath)
+		assert.True(t, os.IsNotExist(statErr), "the validation WAF must not create the audit log on the host")
+	})
+}
+
+func TestValidateIncludes(t *testing.T) {
+	for _, rules := range []string{
+		"Include /etc/passwd",
+		"Include /var/run/secrets/kubernetes.io/serviceaccount/token",
+		"Include ../etc/passwd",
+		"Include ..",
+		`Include C:\Windows\win.ini`,
+		"Include /etc/passwd /etc/shadow",
+		"Include \\\n/etc/passwd",
+		"SecRuleEngine On\ninclude '/etc/passwd'",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			require.Error(t, ValidateIncludes(rules), "an OS path include must be rejected")
+		})
+	}
+
+	for _, rules := range []string{
+		"Include @recommended-conf",
+		"Include @owasp_crs/*.conf",
+		"Include @owasp_crs/REQUEST-900-INITIALIZATION.conf",
+		"Include some.data",
+		"SecRuleEngine On\nSecRule ARGS \"@rx x\" \"id:1,phase:1,pass\"",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			assert.NoError(t, ValidateIncludes(rules))
+		})
+	}
+}
+
+func TestValidateRuleSourceRulesAcceptsRuntimeAliases(t *testing.T) {
+	for _, include := range []string{
+		"Include @recommended-conf",
+		"Include @demo-conf",
+		"Include @ftw-conf",
+		"Include @crs-setup-conf",
+		"SecRuleEngine On\nInclude @crs-setup-conf\nInclude @owasp_crs/*.conf",
+		"Include @owasp_crs/REQUEST-900-INITIALIZATION.conf",
+	} {
+		t.Run(include, func(t *testing.T) {
+			assert.NoError(t, ValidateRuleSourceRules(include, "alias-rs", nil), "the plugin resolves this include at runtime")
+			assert.NoError(t, ValidateRuleSourceRules(include, "alias-rs", map[string][]byte{}))
+		})
+	}
 }

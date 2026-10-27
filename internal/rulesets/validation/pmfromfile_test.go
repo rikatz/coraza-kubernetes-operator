@@ -121,4 +121,89 @@ func TestValidatePMFromFileData(t *testing.T) {
 		)
 		assert.NoError(t, err)
 	})
+
+	// Coraza joins a trailing-backslash continuation, so the scan must too or
+	// the operator file reference hides from the guard.
+	t.Run("continuation cannot hide a pmf argument", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"SecRule ARGS \"@pmf \\\n/etc/passwd\" \"id:1,phase:1,pass\"",
+			nil,
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "/etc/passwd")
+	})
+
+	t.Run("CRLF continuation cannot hide a pmf argument", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"SecRule ARGS \"@pmf \\\r\n/etc/passwd\" \"id:1,phase:1,pass\"",
+			nil,
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "/etc/passwd")
+	})
+
+	t.Run("continuation with a provided data file is accepted", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"SecRule ARGS \"@pmFromFile \\\noverlap.data\" \"id:1,phase:1,pass\"",
+			populatedData,
+		)
+		assert.NoError(t, err)
+	})
+
+	// Both are legitimate Coraza rules: @pmf only counts as an operator when it
+	// starts the quoted rule argument.
+	t.Run("@pmf inside another operator is not an operator", func(t *testing.T) {
+		assert.NoError(t, ValidatePMFromFileData(
+			`SecRule ARGS "@rx @pmf foo" "id:1,phase:1,pass"`,
+			nil,
+		))
+	})
+
+	t.Run("@pmf inside an action message is not an operator", func(t *testing.T) {
+		assert.NoError(t, ValidatePMFromFileData(
+			`SecRule ARGS "@rx x" "id:1,phase:1,pass,msg:'use @pmf foo'"`,
+			nil,
+		))
+	})
+
+	t.Run("leading whitespace inside the quotes is not a pmf operator", func(t *testing.T) {
+		assert.NoError(t, ValidatePMFromFileData(
+			`SecRule ARGS " @pmf /etc/passwd" "id:1,phase:1,pass"`,
+			nil,
+		))
+	})
+
+	for _, operator := range []string{"@pmFromFile", "@pmf", "!@pmf", "!@pmFromFile"} {
+		t.Run(operator+" single token with data", func(t *testing.T) {
+			assert.NoError(t, ValidatePMFromFileData(
+				`SecRule ARGS "`+operator+` overlap.data" "id:1,phase:1,pass"`,
+				populatedData,
+			))
+		})
+
+		t.Run(operator+" single token without data", func(t *testing.T) {
+			require.Error(t, ValidatePMFromFileData(
+				`SecRule ARGS "`+operator+` overlap.data" "id:1,phase:1,pass"`,
+				nil,
+			))
+		})
+
+		t.Run(operator+" multi token", func(t *testing.T) {
+			err := ValidatePMFromFileData(
+				`SecRule ARGS "`+operator+` overlap.data other.data" "id:1,phase:1,pass"`,
+				map[string][]byte{"overlap.data": []byte("x"), "other.data": []byte("y")},
+			)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "single data file name")
+		})
+
+		t.Run(operator+" tab-separated absolute path", func(t *testing.T) {
+			err := ValidatePMFromFileData(
+				"SecRule ARGS \""+operator+"\t/etc/passwd\" \"id:1,phase:1,pass\"",
+				nil,
+			)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "/etc/passwd")
+		})
+	}
 }

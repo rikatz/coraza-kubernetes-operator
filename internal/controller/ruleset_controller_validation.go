@@ -36,10 +36,15 @@ func (r *RuleSetReconciler) validateAggregatedRules(
 	log logr.Logger,
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
+	rules string,
 	conf coraza.WAFConfig,
 ) (time.Duration, error) {
 	start := time.Now()
-	if _, err := coraza.NewWAF(conf); err != nil {
+	err := validation.ValidateIncludes(rules)
+	if err == nil {
+		_, err = coraza.NewWAF(conf)
+	}
+	if err != nil {
 		d := time.Since(start)
 		if isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation) {
 			return d, errRuleSetRulesInvalid
