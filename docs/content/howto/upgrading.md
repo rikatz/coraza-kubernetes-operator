@@ -53,7 +53,7 @@ This release rejects rule text that opens or creates host files while the operat
 
 `SecAuditLog` is now accepted only with `/dev/stdout` or `/dev/stderr`. Any other target made the plugin NACK the configuration (the WASM sandbox cannot open files), so the Engine reported `Ready` without a working WAF. `SecAuditLogType` is still accepted.
 
-The same guard rejects `Include` targets the plugin cannot resolve: unknown `@` aliases, globs outside the exact `@owasp_crs/*.conf` form, and globs in a non-final `@owasp_crs/` segment. A RuleSet whose rules `Include` a RuleData file name containing `/` is rejected as well.
+The same guard rejects `Include` targets the plugin cannot resolve: unknown `@` aliases, globs outside the exact `@owasp_crs/*.conf` form (including nested forms such as `@owasp_crs/crs/*.conf`), and globs in a non-final `@owasp_crs/` segment. A RuleSet whose rules `Include` a RuleData file name containing `/` is rejected as well. Such a glob accepted the configuration but left the WAF with zero rules, so the Engine reported `Ready` without enforcing anything.
 
 ## RuleData Size Limits
 

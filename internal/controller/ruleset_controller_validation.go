@@ -41,9 +41,11 @@ func (r *RuleSetReconciler) validateAggregatedRules(
 	conf coraza.WAFConfig,
 ) (time.Duration, error) {
 	start := time.Now()
-	if _, err := coraza.NewWAF(conf); err != nil {
+	waf, err := coraza.NewWAF(conf)
+	if err != nil {
 		return time.Since(start), r.markRulesInvalid(ctx, log, req, ruleset, err)
 	}
+	validation.CloseWAF(waf)
 	return time.Since(start), nil
 }
 

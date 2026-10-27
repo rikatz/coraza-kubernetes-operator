@@ -74,11 +74,13 @@ references before an Engine accepts the configuration:
   `@crs-setup-conf`, `@owasp_crs/*.conf`, a literal `@owasp_crs/<file>`, and bare
   RuleData file names. The `<file>` must have a non-empty first segment, no empty
   segments, and no `.` or `..` segments. A glob is accepted only as the exact
-  `@owasp_crs/*.conf`: the plugin expands it against the embedded CRS tree, and
-  Coraza only logs an empty glob result instead of failing, so a narrower pattern
-  (`@owasp_crs/REQUEST-*.conf`, `@owasp_crs/NOSUCH-*.conf`), a broader one
-  (`@owasp_crs/*`), one matching non-rule files (`@owasp_crs/*.data`), or a glob in
-  an intermediate segment would compile a zero-rule WAF and still report `Ready`.
+  `@owasp_crs/*.conf`, one segment after the alias: the plugin expands it against
+  the embedded CRS tree, and Coraza only logs an empty glob result instead of
+  failing, so a narrower pattern (`@owasp_crs/REQUEST-*.conf`,
+  `@owasp_crs/NOSUCH-*.conf`), a broader one (`@owasp_crs/*`), one matching
+  non-rule files (`@owasp_crs/*.data`), or one nested a directory deeper
+  (`@owasp_crs/crs/*.conf`, `@owasp_crs/*/*.conf`) would compile a zero-rule WAF
+  and still report `Ready`.
   The bare `@owasp_crs`, the trailing-slash, `.` and double-slash variants name the
   embedded directory rather than a file and are rejected, as is any other
   `@`-prefixed target: the plugin cannot resolve them.
@@ -99,7 +101,10 @@ references before an Engine accepts the configuration:
   with `/dev/stdout` or `/dev/stderr`: the plugin's serial audit writer writes to those
   streams and opens every other target with `os.OpenFile`, which the WASM sandbox
   cannot do, so any other target would NACK the push while the Engine reports `Ready`.
-  The operator's validation WAF always pins its own audit log to `/dev/null`.
+  Under TinyGo the `Concurrent`, `HTTPS` and `Syslog` `SecAuditLogType` writers are
+  no-ops, so audit logging to those sinks is silently dropped: only `/dev/stdout` and
+  `/dev/stderr` are meaningful. The operator's validation WAF always pins its own audit
+  log to `/dev/stdout`, a stream its serial writer opens without a file descriptor.
 
 Known trades of this contract:
 

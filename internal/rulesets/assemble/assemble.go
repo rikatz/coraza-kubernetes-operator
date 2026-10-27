@@ -54,8 +54,8 @@ const maxReportedDataFiles = 5
 const maxReportedDataFileNameBytes = 64
 
 // embeddedDataFiles are served by the plugin's embedded filesystem. That tree
-// is merged first, so a RuleData file with one of these names is accepted and
-// then silently ignored.
+// is merged first, so a RuleData file with one of these names would be shadowed
+// and silently ignored: validateReferences rejects it instead.
 var embeddedDataFiles = map[string]struct{}{
 	"coraza.conf-recommended.conf": {},
 	"coraza-demo.conf":             {},

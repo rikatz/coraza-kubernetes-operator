@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -476,8 +477,8 @@ func TestValidateIncludes(t *testing.T) {
 // TestValidateIncludesRejectsUnresolvableGlobs covers globs the plugin cannot
 // guarantee to match. Only the exact @owasp_crs/*.conf is accepted: Coraza logs
 // an empty glob result instead of failing, so any narrower pattern that matches
-// nothing would compile a zero-rule WAF. A root-level glob matches nothing in
-// either filesystem.
+// nothing would compile a zero-rule WAF, and a nested glob names a directory the
+// plugin does not have. A root-level glob matches nothing in either filesystem.
 func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 	for _, target := range []string{
 		"@owasp_crs/*",
@@ -486,6 +487,8 @@ func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 		"@owasp_crs/REQUEST-*.conf",
 		"@owasp_crs/NOSUCH-*.conf",
 		"@owasp_crs/*[.conf",
+		"@owasp_crs/crs/*.conf",
+		"@owasp_crs/sub/*.conf",
 		"@owasp_crs/*/*.conf",
 		"@owasp_crs/*/REQUEST-901-INITIALIZATION.conf",
 		"@recommended-conf*",
@@ -606,7 +609,7 @@ func TestValidateIncludesRejectsHostWritingDirectives(t *testing.T) {
 }
 
 // TestValidateIncludesRejectsAuditLogFileTargets covers the delivered audit log
-// path: the validation trailer pins it to /dev/null, but the plugin builds the
+// path: the validation trailer pins it to a stream, but the plugin builds the
 // tenant text, so only the stream targets its serial writer can open survive.
 func TestValidateIncludesRejectsAuditLogFileTargets(t *testing.T) {
 	const marker = "tenant-audit-marker-9ad2"
@@ -790,4 +793,34 @@ func TestBuildWAFConfigStubsEmbeddedCRSData(t *testing.T) {
 	_, err := coraza.NewWAF(BuildWAFConfig(
 		"SecRule ARGS \"@pmf crs/restricted-files.data\" \"id:1,phase:1,pass\"", nil))
 	require.NoError(t, err)
+}
+
+// TestValidationWAFFDsAreNotLeaked covers the audit writer the trailer pins:
+// Coraza opens the SecAuditLog target at NewWAF and nothing closes a file
+// target, so a file trailer such as /dev/null would add one descriptor per
+// validation, and tenants can trigger a validation per RuleSource change.
+// Linux only: the count comes from /proc/self/fd.
+func TestValidationWAFFDsAreNotLeaked(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("open file descriptors are counted from /proc/self/fd")
+	}
+	openFDs := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		require.NoError(t, err)
+		return len(entries)
+	}
+	build := func() {
+		waf, err := coraza.NewWAF(BuildWAFConfig("SecRuleEngine On", nil))
+		require.NoError(t, err)
+		CloseWAF(waf)
+	}
+
+	build() // settle any descriptor opened lazily by the first build
+	before := openFDs()
+	for range 50 {
+		build()
+	}
+	// Fewer is fine (the runtime may close a lazily opened file); a leak shows
+	// up as one descriptor per build.
+	assert.LessOrEqual(t, openFDs(), before, "validation must not leak file descriptors")
 }

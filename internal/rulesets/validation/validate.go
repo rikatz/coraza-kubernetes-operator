@@ -27,15 +27,20 @@ import (
 	"strings"
 
 	"github.com/corazawaf/coraza/v3"
+	"github.com/corazawaf/coraza/v3/experimental"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/memfs"
 )
 
-// validationTrailer pins the validation WAF's audit writer to a discarded
-// stream. Coraza opens the SecAuditLog target while compiling a WAF, regardless
-// of SecAuditEngine, so tenant text could otherwise create or truncate any host
-// file the operator can write. The delivered configuration is unaffected.
-const validationTrailer = "\nSecAuditLogType Serial\nSecAuditLog /dev/null"
+// validationTrailer pins the validation WAF's audit writer to a stream. Coraza
+// opens the SecAuditLog target while compiling a WAF, regardless of
+// SecAuditEngine, and the resulting writer is not reachable from the public WAF
+// interface, so nothing can close it: a file target such as /dev/null leaks one
+// descriptor per validation. The serial writer special-cases the streams and
+// opens no descriptor at all. SecAuditLogType is pinned so a tenant Concurrent
+// or Syslog writer cannot open one either. The delivered configuration is
+// unaffected.
+const validationTrailer = "\nSecAuditLogType Serial\nSecAuditLog /dev/stdout"
 
 // BuildWAFConfig returns a validation WAF config whose root filesystem is
 // always in-memory. Coraza falls back to io.OSFS when no root is set, so tenant
@@ -55,6 +60,15 @@ func BuildWAFConfig(rules string, dataFiles map[string][]byte) coraza.WAFConfig 
 		}
 	}
 	return coraza.NewWAFConfig().WithDirectives(rules + validationTrailer).WithRootFS(mfs)
+}
+
+// CloseWAF releases a validation WAF. Coraza registers the WAF's compiled-pattern
+// memoizer at NewWAF and only Close releases it, so every validation build must
+// call this or leak its entry.
+func CloseWAF(waf coraza.WAF) {
+	if closer, ok := waf.(experimental.WAFCloser); ok {
+		_ = closer.Close()
+	}
 }
 
 // validationStubTargets returns the runtime include aliases and embedded
@@ -181,9 +195,9 @@ func ExtractMissingFileBasename(err error) (string, bool) {
 // so a pattern that matches nothing silently yields a zero-rule WAF. The exact
 // @owasp_crs/*.conf is the only glob the embedded tree guarantees to match
 // (every embedded CRS rule file ends in .conf): any other pattern, such as
-// @owasp_crs/REQUEST-*.conf or @owasp_crs/*.data, is rejected. A wrong literal
-// file name there is a documented delivery risk: the operator cannot verify the
-// embedded file list.
+// @owasp_crs/REQUEST-*.conf, @owasp_crs/*.data or the nested
+// @owasp_crs/crs/*.conf, is rejected. A wrong literal file name there is a
+// documented delivery risk: the operator cannot verify the embedded file list.
 func isRuntimeResolvedPath(path string) bool {
 	switch path {
 	case "@recommended-conf", "@demo-conf", "@ftw-conf", "@crs-setup-conf":
@@ -199,14 +213,14 @@ func isRuntimeResolvedPath(path string) bool {
 			return false
 		}
 	}
-	for _, elem := range elems[:len(elems)-1] {
-		if isGlob(elem) {
-			return false
-		}
+	// Only the exact all-conf glob is guaranteed to match embedded rule files,
+	// and it must be the only segment: a nested glob names a directory the
+	// plugin does not have, so ReadDir fails, Coraza logs an empty glob result
+	// and the WAF compiles with zero rules.
+	if isGlob(rel) {
+		return rel == "*.conf"
 	}
-	last := elems[len(elems)-1]
-	// Only the exact all-conf glob is guaranteed to match embedded rule files.
-	return last == "*.conf" || !isGlob(last)
+	return true
 }
 
 // isGlob reports whether elem contains a glob metacharacter. Coraza expands
@@ -430,11 +444,13 @@ func ValidateRuleSourceRules(rules, ruleSourceName string, dataFiles map[string]
 	if IsPatchOnlyFragment(rules) {
 		return nil
 	}
-	if _, err := coraza.NewWAF(BuildWAFConfig(rules, dataFiles)); err != nil {
+	waf, err := coraza.NewWAF(BuildWAFConfig(rules, dataFiles))
+	if err != nil {
 		if ShouldSkipMissingFileError(err, dataFiles) {
 			return nil
 		}
 		return fmt.Errorf("RuleSource %s doesn't contain valid rules: %w", ruleSourceName, SanitizeErrorMessage(err))
 	}
+	CloseWAF(waf)
 	return nil
 }
