@@ -73,10 +73,13 @@ references before an Engine accepts the configuration:
 - `Include` targets: `@recommended-conf`, `@demo-conf`, `@ftw-conf`,
   `@crs-setup-conf`, `@owasp_crs/<path>` (for example `@owasp_crs/*.conf`), and bare
   RuleData file names. The `<path>` must have a non-empty first segment, no empty
-  segments, and no `.` or `..` segments; a glob is allowed in the last segment. The bare
-  `@owasp_crs` and the trailing-slash, `.` or double-slash variants name the embedded
-  directory rather than a file and are rejected, as is any other `@`-prefixed target:
-  the plugin cannot resolve them and would NACK every push.
+  segments, and no `.` or `..` segments. A glob is allowed only in the last segment,
+  and that segment must end in `.conf` (`@owasp_crs/*.conf`,
+  `@owasp_crs/REQUEST-*.conf`): the plugin expands the pattern against the embedded CRS
+  tree, so `@owasp_crs/*` or `@owasp_crs/*.data` would match entries it cannot parse and
+  NACK every push. The bare `@owasp_crs` and the trailing-slash, `.` or double-slash
+  variants name the embedded directory rather than a file and are rejected, as is any
+  other `@`-prefixed target: the plugin cannot resolve them and would NACK every push.
 - `@pmFromFile` / `@pmf` targets: a RuleData file name, or `crs/...` for the CRS data
   files the plugin serves from its embedded tree. A leading `./` is ignored, as Coraza
   path-cleans the argument.

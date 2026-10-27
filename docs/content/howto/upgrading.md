@@ -47,6 +47,12 @@ Affected Engines re-accept their configuration on the next reconcile and the new
 
 The readiness deadline applies to any accepted record this build never reconstructs, not only records left behind by a rendering schema bump; after the deadline the record stops gating operator readiness and is reported once.
 
+## Rule Validation Guard
+
+This release rejects rule text that opens or creates host files while the operator compiles it: `SecDebugLog` (including `/dev/stdout`), `SecUploadDir`, and `SecUploadKeepFiles` with any value other than `Off`. A RuleSet that an older version accepted with one of these directives now fails validation and becomes `Degraded` with `InvalidRuleSet`, and the Engine drops that content from its accepted configuration instead of publishing it again; the Gateway keeps the last configuration the operator published until the directive is removed. RuleSets whose rules `Include` a file carrying such a directive are affected the same way.
+
+The same guard rejects `Include` targets the plugin cannot resolve: unknown `@` aliases, globs outside `@owasp_crs/`, and `@owasp_crs/` globs that do not end in `.conf`. A RuleSet whose rules `Include` a RuleData file name containing `/` is rejected as well.
+
 ## RuleData Size Limits
 
 This release lowers the default decoded RuleData limit per Engine from 12 MiB to 8 MiB (`--xds-max-decoded-data-bytes`). RuleData sets totalling 8–12 MiB that were accepted before now fail acceptance: the Engine reports `Degraded` with `InvalidRuleSet` and its content is not delivered. Reduce the RuleData files, or raise the flag within the plugin's compile-time cap — the operator also refuses at startup a decoded limit whose base64-encoded form plus the maximum data-file key overhead would not fit `--xds-max-message-bytes`.
