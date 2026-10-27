@@ -269,16 +269,19 @@ func ruleSetAcceptancePending(ruleSet *wafv1alpha1.RuleSet) (string, bool) {
 	return "", true
 }
 
-// acceptedRecordUnjustified reports whether the accepted configuration was
-// accepted for a different RuleSet object. Only that makes the record
-// un-reconstructable by definition; a degraded RuleSet may be a wait state
-// (RuleData not found yet), so it keeps the record and leaves the readiness
-// deadline as the safety net.
+// acceptedRecordUnjustified reports whether the accepted configuration can no
+// longer be justified by the RuleSet. A different RuleSet object and a RuleSet
+// whose rules this build rejects are both un-reconstructable by definition. Any
+// other degradation may be a wait state (RuleData not found yet), so the record
+// is kept and the readiness deadline is the safety net.
 func acceptedRecordUnjustified(engine *wafv1alpha1.Engine, ruleSet *wafv1alpha1.RuleSet) bool {
 	if engine.Status == nil || engine.Status.AcceptedConfiguration == nil {
 		return false
 	}
-	return engine.Status.AcceptedConfiguration.RuleSetUID != string(ruleSet.UID)
+	if engine.Status.AcceptedConfiguration.RuleSetUID != string(ruleSet.UID) {
+		return true
+	}
+	return isConditionCurrent(ruleSet.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleSet.Generation)
 }
 
 // awaitRuleSetAcceptance marks the Engine Progressing and requeues until the

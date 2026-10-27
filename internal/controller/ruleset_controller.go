@@ -216,9 +216,10 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// The directive and Include guard is cheap and runs before the accepted
 	// fast path: content accepted by an older build may still carry a host
-	// writing directive or an alias the plugin cannot resolve. Such a RuleSet
-	// would stay Ready while the Engine keeps publishing a payload the plugin
-	// NACKs forever.
+	// writing directive or an alias the plugin cannot resolve. Rejecting it
+	// marks the RuleSet Degraded, which stops the Engine from publishing new
+	// configuration from it. The Engine keeps the configuration it already
+	// accepted, as for any other Degraded wait state.
 	guardStart := time.Now()
 	if guardErr := validation.ValidateIncludes(content.Rules, content.DataFiles); guardErr != nil {
 		if err := r.markRulesInvalid(ctx, log, req, &ruleset, guardErr); !errors.Is(err, errRuleSetRulesInvalid) {

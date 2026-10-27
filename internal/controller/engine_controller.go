@@ -378,9 +378,9 @@ func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logge
 	// A degraded RuleSet is usually a wait state (RuleData not found yet). Keep
 	// the accepted record: the previous snapshot keeps serving and the
 	// publication readiness deadline is the safety net if it never recovers.
-	// A recreated RuleSet (new UID) is not a wait state: the record describes a
-	// different object, so it must be dropped even though the RuleSet is
-	// Degraded for its invalid rules.
+	// A recreated RuleSet (new UID) or one whose rules this build rejects is not
+	// a wait state: the accepted record cannot be reconstructed, so it must be
+	// dropped even though the RuleSet is Degraded.
 	var clear []func()
 	if acceptedRecordUnjustified(engine, &ruleSet) {
 		clear = append(clear, func() { clearAcceptedConfiguration(engine) })

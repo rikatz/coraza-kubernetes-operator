@@ -170,9 +170,11 @@ func TestHostWritingDirectiveInIncludedRuleDataBlocksAcceptance(t *testing.T) {
 }
 
 // TestLegacyAcceptedContentIsRevalidatedOnUpgrade covers a RuleSet whose
-// content an older build accepted. The accepted fast path must still run the
-// directive and Include guard: otherwise the RuleSet stays Ready, the Engine
-// keeps publishing, and the plugin NACKs every push after the upgrade.
+// content an older build accepted and an Engine that published it. The accepted
+// fast path must still run the directive and Include guard: after the upgrade
+// the RuleSet must become Degraded, drop its accepted record, and the Engine
+// must clear the accepted configuration instead of keeping rejected content
+// published.
 func TestLegacyAcceptedContentIsRevalidatedOnUpgrade(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -202,6 +204,8 @@ func TestLegacyAcceptedContentIsRevalidatedOnUpgrade(t *testing.T) {
 				Namespace: testNamespace,
 				Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
 			})
+			// The fake client does not assign UIDs, and render requires them.
+			ruleset.UID = "legacy-accepted-ruleset-uid"
 
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
@@ -234,6 +238,39 @@ func TestLegacyAcceptedContentIsRevalidatedOnUpgrade(t *testing.T) {
 			})
 			require.NoError(t, c.Status().Patch(ctx, &current, patch))
 
+			// The Engine already exists and published the accepted content
+			// before the upgrade. Without this precondition the "must not
+			// publish" assertion below would hold trivially.
+			engine := utils.NewTestEngine(utils.EngineOptions{
+				Name:        "legacy-accepted-engine",
+				Namespace:   testNamespace,
+				GatewayName: "legacy-accepted-gw",
+				RuleSetName: ruleset.Name,
+				WasmURL:     utils.DefaultTestWasmURL,
+				WasmSHA256:  utils.DefaultTestWasmSHA256,
+			})
+			engine.UID = "legacy-accepted-engine-uid"
+			// provisionWasmDriver is called directly, so initialize the status a
+			// full reconcile would have created before this point.
+			engine.Status = &wafv1alpha1.EngineStatus{}
+			require.NoError(t, c.Create(ctx, engine))
+
+			engineReconciler := &EngineReconciler{
+				Client:       c,
+				Scheme:       scheme,
+				Recorder:     utils.NewTestRecorder(),
+				assetBaseURL: testAssetBaseURL,
+				xdsConfig:    testXDSConfig(),
+			}
+			engineReq := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+			_, err = engineReconciler.provisionWasmDriver(ctx, logr.Discard(), engineReq, engine)
+			require.NoError(t, err)
+
+			var published wafv1alpha1.Engine
+			require.NoError(t, c.Get(ctx, engineReq.NamespacedName, &published))
+			require.NotNil(t, published.Status.AcceptedConfiguration, "precondition: the old build published this content")
+
+			// The new build must run the guard before the accepted fast path.
 			metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
 			require.NoError(t, err)
 			ruleSetReconciler := &RuleSetReconciler{
@@ -258,31 +295,15 @@ func TestLegacyAcceptedContentIsRevalidatedOnUpgrade(t *testing.T) {
 			ready := apimeta.FindStatusCondition(updated.Status.Conditions, conditionReady)
 			require.NotNil(t, ready)
 			assert.Equal(t, metav1.ConditionFalse, ready.Status, "a re-rejected RuleSet must not stay Ready")
+			assert.Nil(t, updated.Status.AcceptedContent, "the rejected content must not stay recorded as accepted")
 
-			engine := utils.NewTestEngine(utils.EngineOptions{
-				Name:        "legacy-accepted-engine",
-				Namespace:   testNamespace,
-				GatewayName: "legacy-accepted-gw",
-				RuleSetName: ruleset.Name,
-				WasmURL:     utils.DefaultTestWasmURL,
-				WasmSHA256:  utils.DefaultTestWasmSHA256,
-			})
-			require.NoError(t, c.Create(ctx, engine))
-
-			engineReconciler := &EngineReconciler{
-				Client:       c,
-				Scheme:       scheme,
-				Recorder:     utils.NewTestRecorder(),
-				assetBaseURL: testAssetBaseURL,
-				xdsConfig:    testXDSConfig(),
-			}
-			engineReq := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
-			_, err = engineReconciler.provisionWasmDriver(ctx, logr.Discard(), engineReq, engine)
+			// The Engine sees the rejection and drops the content it published.
+			_, err = engineReconciler.provisionWasmDriver(ctx, logr.Discard(), engineReq, &published)
 			require.NoError(t, err)
 
 			var updatedEngine wafv1alpha1.Engine
 			require.NoError(t, c.Get(ctx, engineReq.NamespacedName, &updatedEngine))
-			assert.Nil(t, updatedEngine.Status.AcceptedConfiguration, "the Engine must not publish a re-rejected RuleSet")
+			assert.Nil(t, updatedEngine.Status.AcceptedConfiguration, "the Engine must clear the re-rejected configuration")
 			progressing := apimeta.FindStatusCondition(updatedEngine.Status.Conditions, conditionProgressing)
 			require.NotNil(t, progressing)
 			assert.Equal(t, reasonAwaitingRuleSetAcceptance, progressing.Reason)

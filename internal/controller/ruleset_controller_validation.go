@@ -60,7 +60,11 @@ func (r *RuleSetReconciler) markRulesInvalid(
 		return errRuleSetRulesInvalid
 	}
 	msg := fmt.Sprintf("Ruleset is invalid\n%v", validation.SanitizeErrorMessage(cause))
-	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
+	// The accepted record describes content this build refuses to compile, so
+	// it must not stay recorded. The Engine clears its accepted configuration
+	// when it sees the rejection.
+	clearAccepted := func() { ruleset.Status.AcceptedContent = nil }
+	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg, clearAccepted); patchErr != nil {
 		return patchErr
 	}
 	return errRuleSetRulesInvalid
