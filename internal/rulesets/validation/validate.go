@@ -113,14 +113,28 @@ func ExtractMissingFileBasename(err error) (string, bool) {
 // resolves the path at runtime. Only these aliases are resolvable there: any
 // other @-prefixed target passes validation but makes the plugin NACK every
 // push, which the operator cannot report because the Engine looks Ready.
-// @owasp_crs/<file> is accepted as a whole: the operator cannot verify the
-// embedded file list, so a typo there is a documented delivery risk.
+// The four file aliases name a single embedded file. @owasp_crs/<path> maps to
+// the embedded CRS tree, so the path must name a file inside it: the bare
+// @owasp_crs and a path with an empty, "." or ".." segment name the directory
+// itself, which cannot be included. A glob in the final segment (for example
+// @owasp_crs/*.conf) is allowed: Coraza expands it against the embedded tree.
+// A wrong file name there is a documented delivery risk: the operator cannot
+// verify the embedded file list.
 func isRuntimeResolvedPath(path string) bool {
 	switch path {
-	case "@recommended-conf", "@demo-conf", "@ftw-conf", "@crs-setup-conf", "@owasp_crs":
+	case "@recommended-conf", "@demo-conf", "@ftw-conf", "@crs-setup-conf":
 		return true
 	}
-	return strings.HasPrefix(path, "@owasp_crs/")
+	rel, ok := strings.CutPrefix(path, "@owasp_crs/")
+	if !ok {
+		return false
+	}
+	for _, elem := range strings.Split(rel, "/") {
+		if elem == "" || elem == "." || elem == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // isOSPath reports whether path addresses the operator's filesystem instead of
@@ -187,11 +201,16 @@ var includePattern = regexp.MustCompile(`(?i)^include[ \t]+(.+)$`)
 // SecDebugLogLevel is deliberately not matched: it only sets a verbosity and
 // opens nothing. SecAuditLog and SecAuditLogType are allowed because
 // validationTrailer overrides them to /dev/null.
-var forbiddenDirectivePattern = regexp.MustCompile(`(?i)^(secdebuglog|secuploaddir|secuploadkeepfiles)(?:[ \t]|$)`)
+var forbiddenDirectivePattern = regexp.MustCompile(`(?i)^(secdebuglog|secuploaddir)(?:[ \t]|$)`)
+
+// uploadKeepFilesPattern matches SecUploadKeepFiles and its value. Only "Off" is
+// accepted: every other value keeps uploaded files on disk, and the plugin has
+// no upload directory.
+var uploadKeepFilesPattern = regexp.MustCompile(`(?i)^secuploadkeepfiles(?:[ \t]+(\S+))?`)
 
 // allowedIncludeTargets lists the reference forms a tenant may use. It is
 // static so neither a rejected path nor rule content can leak into status.
-const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-setup-conf, @owasp_crs/... or a RuleData file name"
+const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-setup-conf, @owasp_crs/<path> or a RuleData file name"
 
 // ValidateIncludes rejects Include targets that address the operator
 // filesystem, unresolvable aliases, and directives that write host files. The
@@ -202,26 +221,66 @@ const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-se
 // resolves them from its embedded filesystem.
 //
 // dataFiles are the RuleData files merged for the RuleSet. An Include of a
-// RuleData name is parsed as rule text, so their content is scanned too; pass
-// nil on the RuleSource path, which has no merged data.
+// RuleData name is parsed as rule text, so the content of every included file
+// is scanned too. @pmFromFile data is never parsed as SecLang and is not
+// scanned: a blocklist that happens to contain the text of a forbidden
+// directive is valid. Pass nil on the RuleSource path, which has no merged data.
 func ValidateIncludes(rules string, dataFiles map[string][]byte) error {
-	if err := validateRuleText(rules); err != nil {
-		return err
-	}
-	for name, data := range dataFiles {
-		if err := validateRuleText(string(data)); err != nil {
-			return fmt.Errorf("included RuleData file %s: %w", name, err)
+	queue := []struct{ name, text string }{{text: rules}}
+	scanned := make(map[string]struct{}, len(dataFiles))
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		included, err := validateRuleText(current.text)
+		if err != nil {
+			if current.name == "" {
+				return err
+			}
+			return fmt.Errorf("included RuleData file %s: %w", current.name, err)
+		}
+		for _, name := range included {
+			if _, seen := scanned[name]; seen {
+				continue
+			}
+			data, ok := dataFiles[name]
+			if !ok {
+				continue
+			}
+			scanned[name] = struct{}{}
+			queue = append(queue, struct{ name, text string }{name: name, text: string(data)})
 		}
 	}
 	return nil
 }
 
 // validateRuleText rejects the directives and Include targets a tenant rule
-// text (or an included data file) may not use.
-func validateRuleText(rules string) error {
+// text (or an included data file) may not use. It returns the RuleData file
+// names the text Includes, so the caller can scan their content too.
+// shortcut: a glob Include is not expanded for scanning; Coraza still parses
+// the matched files during compilation, which happens in the in-memory root.
+func validateRuleText(rules string) ([]string, error) {
+	// Coraza skips blank and comment lines before checking for a line
+	// continuation, so a trailing "\" would swallow the first directive of
+	// validationTrailer and report a confusing action error.
+	lastContinued := false
+	for line := range strings.SplitSeq(rules, "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			lastContinued = strings.HasSuffix(line, `\`)
+		}
+	}
+	if lastContinued {
+		return nil, errors.New(`rule text ends with a line continuation: remove the trailing "\"`)
+	}
+
+	var included []string
 	for line := range strings.SplitSeq(joinActiveRuleLines(rules), "\n") {
 		if match := forbiddenDirectivePattern.FindStringSubmatch(line); match != nil {
-			return fmt.Errorf("%s is not allowed: rule validation must not write host files", match[1])
+			return nil, fmt.Errorf("%s is not allowed: rule validation must not write host files", match[1])
+		}
+		if match := uploadKeepFilesPattern.FindStringSubmatch(line); match != nil {
+			if len(match) < 2 || !strings.EqualFold(strings.Trim(match[1], `"'`), "off") {
+				return nil, errors.New("SecUploadKeepFiles is not allowed: rule validation must not write host files")
+			}
 		}
 		match := includePattern.FindStringSubmatch(line)
 		if match == nil {
@@ -230,12 +289,16 @@ func validateRuleText(rules string) error {
 		target := strings.Trim(strings.TrimSpace(match[1]), `"'`)
 		switch {
 		case isOSPath(target):
-			return errors.New(`Include with an absolute or parent-relative path is not allowed: use ` + allowedIncludeTargets)
-		case strings.HasPrefix(target, "@") && !isRuntimeResolvedPath(target):
-			return errors.New(`Include alias is not resolved by the plugin: use ` + allowedIncludeTargets)
+			return nil, errors.New(`Include with an absolute or parent-relative path is not allowed: use ` + allowedIncludeTargets)
+		case strings.HasPrefix(target, "@"):
+			if !isRuntimeResolvedPath(target) {
+				return nil, errors.New(`Include alias is not resolved by the plugin: use ` + allowedIncludeTargets)
+			}
+		default:
+			included = append(included, path.Clean(target))
 		}
 	}
-	return nil
+	return included, nil
 }
 
 // ValidateRuleSourceRules validates SecLang rule text via Coraza. dataFiles
@@ -245,11 +308,13 @@ func validateRuleText(rules string) error {
 // appear in the map. RuleSet aggregate validation remains authoritative for
 // cross-source and full RuleData-backed rules.
 func ValidateRuleSourceRules(rules, ruleSourceName string, dataFiles map[string][]byte) error {
-	if IsPatchOnlyFragment(rules) {
-		return nil
-	}
+	// The guard is cheap and applies to patch-only fragments too: they are
+	// skipped by Coraza, not by the directive and alias rules.
 	if err := ValidateIncludes(rules, dataFiles); err != nil {
 		return fmt.Errorf("RuleSource %s doesn't contain valid rules: %w", ruleSourceName, err)
+	}
+	if IsPatchOnlyFragment(rules) {
+		return nil
 	}
 	if _, err := coraza.NewWAF(BuildWAFConfig(rules, dataFiles)); err != nil {
 		if ShouldSkipMissingFileError(err, dataFiles) {

@@ -225,7 +225,7 @@ func TestShouldSkipMissingFileError(t *testing.T) {
 		},
 		{
 			name:       "runtime alias is skipped with an empty data file map",
-			err:        &fs.PathError{Op: "open", Path: "@owasp_crs/REQUEST-900-INITIALIZATION.conf", Err: fs.ErrNotExist},
+			err:        &fs.PathError{Op: "open", Path: "@owasp_crs/REQUEST-901-INITIALIZATION.conf", Err: fs.ErrNotExist},
 			secretData: map[string][]byte{},
 			want:       true,
 		},
@@ -364,9 +364,8 @@ func TestValidateIncludes(t *testing.T) {
 		"Include @demo-conf",
 		"Include @ftw-conf",
 		"Include @crs-setup-conf",
-		"Include @owasp_crs",
 		"Include @owasp_crs/*.conf",
-		"Include @owasp_crs/REQUEST-900-INITIALIZATION.conf",
+		"Include @owasp_crs/REQUEST-901-INITIALIZATION.conf",
 		"Include some.data",
 		"Include ./some.data",
 		"SecRuleEngine On\nSecRule ARGS \"@rx x\" \"id:1,phase:1,pass\"",
@@ -387,16 +386,29 @@ func TestValidateIncludesRejectsUnknownAliases(t *testing.T) {
 		"@notanalias",
 		"@",
 		"@crs-setup",
-		"@OWASP_CRS/REQUEST-900-INITIALIZATION.conf",
+		"@OWASP_CRS/REQUEST-901-INITIALIZATION.conf",
 		"@owasp_crsx/open.conf",
 		"@owasp_crs/../setup.conf",
+		"@owasp_crs/./open.conf",
+		"@owasp_crs//open.conf",
+		"@owasp_crs/open/./nested.conf",
 		"@recommended-conf-extra",
 	} {
 		t.Run(target, func(t *testing.T) {
 			err := ValidateIncludes("Include "+target, nil)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "@owasp_crs/...", "the error must name the allowed aliases")
+			assert.Contains(t, err.Error(), "@owasp_crs/<path>", "the error must name the allowed aliases")
 			assert.NotContains(t, err.Error(), "notanalias")
+		})
+	}
+
+	// The bare alias names the embedded directory, not a file: the plugin has no
+	// file mapping for it, so it would NACK every push.
+	for _, target := range []string{"@owasp_crs", "@owasp_crs/"} {
+		t.Run(target, func(t *testing.T) {
+			err := ValidateIncludes("Include "+target, nil)
+			require.Error(t, err, "the bare CRS directory cannot be included")
+			assert.Contains(t, err.Error(), "@owasp_crs/<path>")
 		})
 	}
 
@@ -417,7 +429,9 @@ func TestValidateIncludesRejectsHostWritingDirectives(t *testing.T) {
 		"secdebuglog /dev/stdout",
 		"SecUploadDir /dev/shm/" + marker,
 		"SecUploadKeepFiles On",
-		"SecUploadKeepFiles Off",
+		"SecUploadKeepFiles",
+		"SecUploadKeepFiles \"On\"",
+		"secuploadkeepfiles on",
 	} {
 		t.Run(rules, func(t *testing.T) {
 			err := ValidateIncludes(rules, nil)
@@ -430,6 +444,9 @@ func TestValidateIncludesRejectsHostWritingDirectives(t *testing.T) {
 
 	assert.NoError(t, ValidateIncludes("SecDebugLogLevel 9", nil))
 	assert.NoError(t, ValidateIncludes("SecDebugLog2 /dev/stdout", nil))
+	// "Off" has no host effect and appears in stock CRS snippets.
+	assert.NoError(t, ValidateIncludes("SecUploadKeepFiles Off", nil))
+	assert.NoError(t, ValidateIncludes("SecUploadKeepFiles \"Off\"", nil))
 }
 
 func TestValidateRuleSourceRulesAcceptsRuntimeAliases(t *testing.T) {
@@ -438,13 +455,22 @@ func TestValidateRuleSourceRulesAcceptsRuntimeAliases(t *testing.T) {
 		"Include @demo-conf",
 		"Include @ftw-conf",
 		"Include @crs-setup-conf",
-		"Include @owasp_crs",
 		"SecRuleEngine On\nInclude @crs-setup-conf\nInclude @owasp_crs/*.conf",
-		"Include @owasp_crs/REQUEST-900-INITIALIZATION.conf",
+		"Include @owasp_crs/REQUEST-901-INITIALIZATION.conf",
 	} {
 		t.Run(include, func(t *testing.T) {
 			assert.NoError(t, ValidateRuleSourceRules(include, "alias-rs", nil), "the plugin resolves this include at runtime")
 			assert.NoError(t, ValidateRuleSourceRules(include, "alias-rs", map[string][]byte{}))
+		})
+	}
+
+	// The bare directory alias cannot be resolved to a file by the plugin.
+	for _, include := range []string{"Include @owasp_crs", "Include @owasp_crs/"} {
+		t.Run(include, func(t *testing.T) {
+			err := ValidateRuleSourceRules(include, "alias-rs", nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "alias-rs")
+			assert.Contains(t, err.Error(), "@owasp_crs/<path>")
 		})
 	}
 }
@@ -456,8 +482,22 @@ func TestValidateRuleSourceRulesRejectsUnknownAlias(t *testing.T) {
 	err := ValidateRuleSourceRules("Include @notanalias", "alias-rs", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "alias-rs")
-	assert.Contains(t, err.Error(), "@owasp_crs/...")
+	assert.Contains(t, err.Error(), "@owasp_crs/<path>")
 	assert.NotContains(t, err.Error(), "notanalias")
+}
+
+// TestValidateRuleSourceRulesScansPatchOnlyFragments covers patch-only
+// fragments, which skip Coraza but still carry Include directives the plugin
+// must resolve.
+func TestValidateRuleSourceRulesScansPatchOnlyFragments(t *testing.T) {
+	rules := "SecRuleRemoveById 1\nInclude @notanalias"
+	assert.True(t, IsPatchOnlyFragment(rules), "test requires a patch-only fragment")
+	require.NoError(t, ValidateRuleSourceRules("SecRuleRemoveById 1", "patch-rs", nil))
+
+	err := ValidateRuleSourceRules(rules, "patch-rs", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "patch-rs")
+	assert.Contains(t, err.Error(), "@owasp_crs/<path>")
 }
 
 // TestValidateRuleSourceRulesRejectsDebugLog covers the RuleSource entry point:
@@ -480,7 +520,8 @@ func TestValidateRuleSourceRulesRejectsDebugLog(t *testing.T) {
 
 // TestValidateIncludesScansIncludedDataFiles covers a RuleData file that the
 // rule text Includes: Coraza parses an included file as rule text, so a
-// host-writing directive hidden there must be rejected too.
+// host-writing directive hidden there must be rejected too. A @pmFromFile data
+// file is never parsed as SecLang, so directive text inside it is just data.
 func TestValidateIncludesScansIncludedDataFiles(t *testing.T) {
 	const marker = "data-content-marker-2c94"
 	dataFiles := map[string][]byte{
@@ -500,6 +541,26 @@ func TestValidateIncludesScansIncludedDataFiles(t *testing.T) {
 	assert.NoError(t, ValidateIncludes("Include good.data", map[string][]byte{
 		"good.data": []byte("word\nother-word\n"),
 	}))
+
+	// A blocklist that contains the text of a forbidden directive is a valid
+	// pattern file: @pmFromFile data is not SecLang.
+	pmfRules := `SecRule ARGS "@pmf blocklist.data" "id:1,phase:1,deny"`
+	blocklist := map[string][]byte{
+		"blocklist.data": []byte("evilmonkey\nSecUploadDir /tmp\nSecDebugLog /dev/stdout\n"),
+	}
+	assert.NoError(t, ValidateIncludes(pmfRules, blocklist))
+	assert.NoError(t, ValidateRuleSourceRules(pmfRules, "pmf-rs", blocklist))
+
+	// An included file that Includes another RuleData file is parsed too, so its
+	// content is reached by the scan.
+	nested := map[string][]byte{
+		"outer.data": []byte("Include inner.data\n"),
+		"inner.data": []byte("SecDebugLog /dev/shm/" + marker + "\n"),
+	}
+	err = ValidateIncludes("Include outer.data", nested)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inner.data")
+	assert.NotContains(t, err.Error(), marker)
 }
 
 // TestBuildWAFConfigSecDebugLogWritesHostFile documents why SecDebugLog is
@@ -511,6 +572,28 @@ func TestBuildWAFConfigSecDebugLogWritesHostFile(t *testing.T) {
 
 	_, statErr := os.Stat(debugLog)
 	assert.NoError(t, statErr, "without the validation guard Coraza creates the debug log on the host")
+}
+
+// TestBuildWAFConfigTrailerIsNotGlued covers rule text that ends in a line
+// continuation: Coraza skips blank lines before joining a continued line, so
+// the trailer's first directive would be swallowed into the last rule and
+// compilation would fail with a confusing action error. The guard rejects it.
+func TestBuildWAFConfigTrailerIsNotGlued(t *testing.T) {
+	rules := "SecRuleEngine On\nSecRule ARGS \"@rx x\" \"id:1,phase:1,pass\"\\\n"
+
+	for _, check := range []func(string, string, map[string][]byte) error{
+		func(rules, _ string, dataFiles map[string][]byte) error { return ValidateIncludes(rules, dataFiles) },
+		ValidateRuleSourceRules,
+	} {
+		err := check(rules, "continuation-rs", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "line continuation")
+		assert.NotContains(t, err.Error(), "SecAuditLogType")
+	}
+
+	// The same rules with the trailing continuation removed compile normally.
+	_, err := coraza.NewWAF(BuildWAFConfig(strings.TrimSuffix(rules, "\\\n"), nil))
+	require.NoError(t, err)
 }
 
 // TestBuildWAFConfigStubsEmbeddedCRSData covers the embedded CRS data a tenant

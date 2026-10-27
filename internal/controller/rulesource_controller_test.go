@@ -130,6 +130,34 @@ func TestRuleSourceReconciler_MalformedPatchOnlyFragment(t *testing.T) {
 		"skipped outcomes must not emit validation duration histograms")
 }
 
+// TestRuleSourceReconciler_PatchOnlyFragmentWithBadInclude covers the guard for
+// patch-only fragments: Coraza is skipped, but an Include the plugin cannot
+// resolve must still be rejected at source level.
+func TestRuleSourceReconciler_PatchOnlyFragmentWithBadInclude(t *testing.T) {
+	ctx := context.Background()
+	rs := utils.NewTestRuleSource("rs-ctrl-patch-bad-include", testNamespace,
+		"SecRuleRemoveById 1\nInclude @notanalias")
+	require.NoError(t, k8sClient.Create(ctx, rs))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder(), Metrics: m}
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
+	deg := apimeta.FindStatusCondition(rs.Status.Conditions, conditionDegraded)
+	require.NotNil(t, deg)
+	assert.Equal(t, metav1.ConditionTrue, deg.Status)
+	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
+	assert.Contains(t, deg.Message, "@owasp_crs/<path>")
+	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "invalid"))
+	assert.Equal(t, float64(0), gatherValidationCounter(t, reg, "skipped"))
+}
+
 func TestRuleSourceReconciler_MetricsNotIncrementedOnResync(t *testing.T) {
 	ctx := context.Background()
 	rs := utils.NewTestRuleSource("rs-ctrl-resync", testNamespace,

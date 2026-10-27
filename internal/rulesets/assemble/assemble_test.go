@@ -304,7 +304,7 @@ func TestAssembleRejectsEmbeddedDataFileNames(t *testing.T) {
 				"coraza-demo.conf":                    "x",
 				"ftw-config.conf":                     "x",
 				"crs-setup.conf.example":              "x",
-				"crs/REQUEST-900-INITIALIZATION.conf": "x",
+				"crs/REQUEST-901-INITIALIZATION.conf": "x",
 				"ok.data":                             "x",
 			},
 		}},
@@ -312,7 +312,7 @@ func TestAssembleRejectsEmbeddedDataFileNames(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "shadow embedded plugin files")
 	assert.Contains(t, err.Error(), `"coraza.conf-recommended.conf" (RuleData legacy-data)`)
-	assert.Contains(t, err.Error(), `"crs/REQUEST-900-INITIALIZATION.conf" (RuleData legacy-data)`)
+	assert.Contains(t, err.Error(), `"crs/REQUEST-901-INITIALIZATION.conf" (RuleData legacy-data)`)
 	assert.NotContains(t, err.Error(), "ok.data")
 }
 
@@ -341,11 +341,11 @@ func TestAssembleRejectsPluginAliasDataFileNames(t *testing.T) {
 
 	err = assembleWith(map[string]string{
 		"@owasp_crs": "x",
-		"@owasp_crs/REQUEST-900-INITIALIZATION.conf": "x",
+		"@owasp_crs/REQUEST-901-INITIALIZATION.conf": "x",
 		"ok.data": "x",
 	})
 	assert.Contains(t, err.Error(), `"@owasp_crs" (RuleData legacy-data)`)
-	assert.Contains(t, err.Error(), `"@owasp_crs/REQUEST-900-INITIALIZATION.conf" (RuleData legacy-data)`)
+	assert.Contains(t, err.Error(), `"@owasp_crs/REQUEST-901-INITIALIZATION.conf" (RuleData legacy-data)`)
 }
 
 func TestAssembleCapsReportedInvalidDataFileNames(t *testing.T) {

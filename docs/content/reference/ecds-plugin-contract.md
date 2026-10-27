@@ -71,15 +71,19 @@ Rule text may reference only what both sides can resolve. The operator validates
 references before an Engine accepts the configuration:
 
 - `Include` targets: `@recommended-conf`, `@demo-conf`, `@ftw-conf`,
-  `@crs-setup-conf`, `@owasp_crs` (the whole tree, e.g. `@owasp_crs/*.conf`), and bare
-  RuleData file names. Any other `@`-prefixed target is rejected with the list of
-  allowed aliases, because the plugin cannot resolve it and would NACK every push.
+  `@crs-setup-conf`, `@owasp_crs/<path>` (for example `@owasp_crs/*.conf`), and bare
+  RuleData file names. The `<path>` must have a non-empty first segment, no empty
+  segments, and no `.` or `..` segments; a glob is allowed in the last segment. The bare
+  `@owasp_crs` and the trailing-slash, `.` or double-slash variants name the embedded
+  directory rather than a file and are rejected, as is any other `@`-prefixed target:
+  the plugin cannot resolve them and would NACK every push.
 - `@pmFromFile` / `@pmf` targets: a RuleData file name, or `crs/...` for the CRS data
   files the plugin serves from its embedded tree. A leading `./` is ignored, as Coraza
   path-cleans the argument.
 - Directives that open or create host files during compilation are rejected:
-  `SecDebugLog`, `SecUploadDir`, and `SecUploadKeepFiles`. This covers rule text and any
-  RuleData file the rules `Include` (an included file is parsed as rule text).
+  `SecDebugLog`, `SecUploadDir`, and `SecUploadKeepFiles` with any value other than
+  `Off`. This covers rule text and any RuleData file the rules `Include` (an included
+  file is parsed as rule text). `@pmFromFile` data is not SecLang and is not scanned.
   `SecDebugLogLevel`, `SecAuditLog`, and `SecAuditLogType` are accepted; the plugin
   routes debug output to its proxy logs and the operator's validation WAF pins the
   audit log to `/dev/null`.
