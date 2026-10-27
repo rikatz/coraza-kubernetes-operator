@@ -635,6 +635,112 @@ func TestEngineReconciler_KeepsAcceptedConfigurationWhenRuleDataIsMissing(t *tes
 	assert.Equal(t, "RuleSetDegraded", degraded.Reason)
 }
 
+// TestEngineReconciler_ClearsAcceptedConfigurationWhenRuleDataIsGone covers the
+// load failure that has no RuleSet wait state: the RuleSet still reports its
+// accepted generation but a referenced RuleData was deleted. The accepted record
+// cannot be reconstructed, so it must be cleared rather than gate readiness.
+func TestEngineReconciler_ClearsAcceptedConfigurationWhenRuleDataIsGone(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+	engine := newDeliveryLimitEngineFixture(t, ctx, ns, "inputs-gone")
+	reconciler := newAcceptedEngineTestReconciler()
+	reconcileEngine(t, ctx, reconciler, engine)
+
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+	var accepted wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &accepted))
+	require.NotNil(t, accepted.Status.AcceptedConfiguration, "the fixture must be accepted first")
+
+	var ruleSet wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: engine.Spec.RuleSet.Name}, &ruleSet))
+	require.Len(t, ruleSet.Spec.Data, 1)
+	var data wafv1alpha1.RuleData
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: ruleSet.Spec.Data[0].Name}, &data))
+	require.NoError(t, k8sClient.Delete(ctx, &data))
+
+	_, err := reconciler.Reconcile(ctx, request)
+	require.Error(t, err, "a NotFound input is a retriable reconcile error")
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &updated))
+	assert.Nil(t, updated.Status.AcceptedConfiguration, "the stale accepted record must be cleared")
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+	assert.Equal(t, "RuleSetInputsUnavailable", degraded.Reason)
+
+	readiness := xds.NewPublicationReadiness()
+	readiness.Initialize([]*wafv1alpha1.Engine{&updated})
+	assert.NoError(t, readiness.Check(), "a cleared record must not gate readiness")
+}
+
+// TestEngineReconciler_ClearsAcceptedConfigurationWhenRecreatedRuleSetIsDegraded
+// covers a recreated RuleSet whose invalid rules keep it Degraded: the UID
+// change must clear the record before the degraded wait-state rule keeps it.
+func TestEngineReconciler_ClearsAcceptedConfigurationWhenRecreatedRuleSetIsDegraded(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+	engine := newDeliveryLimitEngineFixture(t, ctx, ns, "recreated-degraded")
+	reconciler := newAcceptedEngineTestReconciler()
+	reconcileEngine(t, ctx, reconciler, engine)
+
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+	var accepted wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &accepted))
+	require.NotNil(t, accepted.Status.AcceptedConfiguration)
+
+	var old wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: engine.Spec.RuleSet.Name}, &old))
+	require.Len(t, old.Spec.Sources, 1)
+	require.NoError(t, k8sClient.Delete(ctx, &old))
+
+	recreated := &wafv1alpha1.RuleSet{
+		ObjectMeta: metav1.ObjectMeta{Name: old.Name, Namespace: old.Namespace},
+		Spec:       old.Spec,
+	}
+	require.NoError(t, k8sClient.Create(ctx, recreated))
+	require.NotEqual(t, old.UID, recreated.UID, "the recreated RuleSet must have a new UID")
+
+	// Make the recreated RuleSet Degraded for its current generation by
+	// invalidating the RuleSource it references.
+	var source wafv1alpha1.RuleSource
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: old.Spec.Sources[0].Name}, &source))
+	source.Spec.Rules = `SecInvalidDirective "bad"`
+	require.NoError(t, k8sClient.Update(ctx, &source))
+
+	sourceReconciler := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}
+	_, err := sourceReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&source)})
+	require.NoError(t, err)
+
+	ruleSetReconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+	}
+	_, err = ruleSetReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(recreated)})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(recreated), recreated))
+	degradedRuleSet := apimeta.FindStatusCondition(recreated.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degradedRuleSet)
+	require.Equal(t, metav1.ConditionTrue, degradedRuleSet.Status, "the recreated RuleSet must be Degraded")
+
+	_, err = reconciler.Reconcile(ctx, request)
+	require.NoError(t, err)
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &updated))
+	assert.Nil(t, updated.Status.AcceptedConfiguration,
+		"a recreated RuleSet must not keep the old RuleSet's accepted record, even while Degraded")
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Equal(t, "RuleSetDegraded", degraded.Reason)
+
+	readiness := xds.NewPublicationReadiness()
+	readiness.Initialize([]*wafv1alpha1.Engine{&updated})
+	assert.NoError(t, readiness.Check(), "a cleared record must not gate readiness")
+}
+
 func TestEngineReconciler_AcceptsConfigurationAndAttachesEnvoyFilter(t *testing.T) {
 	ctx := context.Background()
 	ns := setupTestNamespace(t, ctx)

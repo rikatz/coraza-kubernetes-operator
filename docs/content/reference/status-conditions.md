@@ -55,10 +55,31 @@ The Engine could not reach its desired state. Common reasons:
 |--------|-------------|------------|
 | `RuleSetNotFound` | The referenced RuleSet does not exist. | Verify the RuleSet name and namespace in the Engine spec. |
 | `RuleSetDegraded` | The referenced RuleSet is in a Degraded state. | Check the RuleSet status: `kubectl describe ruleset <name>`. |
+| `RuleSetInputsUnavailable` | A RuleSource or RuleData the accepted RuleSet references could not be loaded (for example it was deleted). | Recreate the missing object or fix the reference; the RuleSet must re-accept its content. |
+| `InvalidRuleSet` | The accepted RuleSet content cannot be assembled, or it exceeds the operator's delivery limits (`xds-max-decoded-data-bytes`, `xds-max-data-files`, rule text size). | Reduce the RuleData size or file count, or raise the limit if it stays below the plugin caps. |
+| `RenderFailed` | The rendered ECDS payload cannot be delivered (it exceeds `xds-max-message-bytes`) or rendering failed. | Reduce RuleData or rule text, or raise `xds-max-message-bytes` up to the plugin payload cap. |
 | `InvalidConfiguration` | The Engine spec contains an invalid configuration. | Check the condition message for details and fix the Engine spec. |
 | `ProvisioningFailed` | Failed to create or update the EnvoyFilter resource. | Check operator logs and RBAC permissions. |
 | `NetworkPolicyFailed` | Failed to apply the NetworkPolicy that restricts access to the operator's xDS listener. | Check operator logs and RBAC permissions. |
 | `TLSNotConfigured` | The operator has no verified CA chain for its xDS serving certificate. | Set `--xds-ca-path` to the CA bundle Gateways use to verify the operator certificate. |
+
+When the Engine reports `InvalidRuleSet` from the delivery-limit check, `RenderFailed`
+for an oversized payload, or `RuleSetInputsUnavailable` for an input that no longer
+exists, the operator clears `status.acceptedConfiguration`. That removes the accepted
+configuration from the ECDS serving plane, so the Gateway keeps the last snapshot it
+already received but no longer gets updates or restarts with WAF coverage until the
+Engine accepts a configuration again. Wait states (a degraded RuleSet that is only
+missing RuleData, or a RuleSet that has not accepted the current generation) keep the
+last good accepted configuration and snapshot instead, so traffic stays protected by the
+previous rules. A cleared record is not a fail-closed signal on its own: a fresh Gateway
+pod receives no WAF configuration from the operator for this Engine.
+
+An accepted configuration recorded before the operator restarted must be reconstructed
+by every replica. If one cannot be reconstructed, the replica stays unready for the
+ECDS plane for up to two minutes and then reports the record and starts serving anyway,
+keeping the last snapshot it already had. Readiness never turns a stale snapshot into a
+fail-closed Gateway; the record is reported in operator logs and the
+`coraza_xds_cold_reconstruction_failures_total` metric instead.
 
 ## RuleSource Conditions
 
