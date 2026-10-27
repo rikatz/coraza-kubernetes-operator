@@ -48,4 +48,33 @@ func TestLimitsValidateRejectsPluginCapViolations(t *testing.T) {
 	err = Limits{MaxDecodedDataBytes: pluginMaxDecodedDataBytes + 1}.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "xds-max-decoded-data-bytes")
+
+	err = Limits{MaxDataFiles: pluginMaxDataFiles + 1}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "xds-max-data-files")
+}
+
+// TestLimitsValidateRejectsUndeliverableCombination checks the combined bound:
+// the base64-expanded decoded limit plus the maximum key overhead must fit one
+// message after the envelope, or accepted Engines would never be delivered.
+func TestLimitsValidateRejectsUndeliverableCombination(t *testing.T) {
+	files := 1
+	decoded := 3
+	base64Bytes := (decoded*4 + 2) / 3
+	maxMessage := base64Bytes + files*(DataFileNameBytes+dataFileKeyOverheadBytes) + MessageEnvelopeBytes
+
+	assert.NoError(t, Limits{
+		MaxMessageBytes:     maxMessage,
+		MaxDecodedDataBytes: decoded,
+		MaxDataFiles:        files,
+	}.Validate(), "the boundary must be accepted")
+
+	err := Limits{
+		MaxMessageBytes:     maxMessage - 1,
+		MaxDecodedDataBytes: decoded,
+		MaxDataFiles:        files,
+	}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "xds-max-message-bytes")
+	assert.Contains(t, err.Error(), "base64")
 }

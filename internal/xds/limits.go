@@ -70,11 +70,28 @@ const (
 	DefaultTokenReviewRetries = 2
 )
 
+const (
+	// MessageEnvelopeBytes reserves the DiscoveryResponse wrapper the xDS server
+	// adds around a rendered resource (version_info, nonce, type_url, the
+	// control-plane identifier and the Any framing). grpc.MaxSendMsgSize applies
+	// to the whole message, so a resource that only fits without the wrapper is
+	// Ready but undeliverable.
+	MessageEnvelopeBytes = 1 << 10
+	// DataFileNameBytes is the CKO API cap on a RuleData file name (and so the
+	// plugin's cap on a data-file key).
+	DataFileNameBytes = 253
+	// dataFileKeyOverheadBytes bounds the JSON punctuation around one data-file
+	// key (`"name":"content",`). Names are limited to [-._a-zA-Z0-9], so they
+	// never need JSON escaping.
+	dataFileKeyOverheadBytes = 8
+)
+
 // The plugin NACKs a configuration above its compile-time caps, so an operator
 // configured past them would leave a Ready Engine without a published WAF.
 const (
 	pluginMaxMessageBytes     = 16 << 20
 	pluginMaxDecodedDataBytes = 12 << 20
+	pluginMaxDataFiles        = 4096
 )
 
 // Limits is the serving-plane resource envelope. Flag defaults live in
@@ -160,11 +177,23 @@ func (l Limits) WithDefaults() Limits {
 // Validate rejects limits the plugin cannot honour. Zero values pass and are
 // filled by WithDefaults.
 func (l Limits) Validate() error {
+	l = l.WithDefaults()
 	if l.MaxMessageBytes > pluginMaxMessageBytes {
 		return fmt.Errorf("xds-max-message-bytes %d exceeds the plugin payload cap of %d bytes", l.MaxMessageBytes, pluginMaxMessageBytes)
 	}
 	if l.MaxDecodedDataBytes > pluginMaxDecodedDataBytes {
 		return fmt.Errorf("xds-max-decoded-data-bytes %d exceeds the plugin decoded RuleData cap of %d bytes", l.MaxDecodedDataBytes, pluginMaxDecodedDataBytes)
+	}
+	if l.MaxDataFiles > pluginMaxDataFiles {
+		return fmt.Errorf("xds-max-data-files %d exceeds the plugin data file cap of %d files", l.MaxDataFiles, pluginMaxDataFiles)
+	}
+	// Worst case: every RuleData byte is base64-expanded (4/3) and every data
+	// file name is at its maximum length. If that cannot fit one message, a
+	// perfectly valid Engine would be accepted but never deliverable.
+	base64Bytes := (l.MaxDecodedDataBytes*4 + 2) / 3
+	keyOverhead := l.MaxDataFiles * (DataFileNameBytes + dataFileKeyOverheadBytes)
+	if required := base64Bytes + keyOverhead + MessageEnvelopeBytes; required > l.MaxMessageBytes {
+		return fmt.Errorf("xds-max-decoded-data-bytes %d and xds-max-data-files %d need up to %d bytes once base64-encoded and keyed, which exceeds xds-max-message-bytes %d", l.MaxDecodedDataBytes, l.MaxDataFiles, required, l.MaxMessageBytes)
 	}
 	return nil
 }
@@ -176,7 +205,7 @@ func (l *Limits) AddFlags(fs *flag.FlagSet) {
 	fs.IntVar(&l.MaxDecodedDataBytes, "xds-max-decoded-data-bytes", DefaultMaxDecodedDataBytes,
 		"Maximum decoded RuleData bytes carried by one Engine (the plugin accepts at most 12 MiB)")
 	fs.IntVar(&l.MaxDataFiles, "xds-max-data-files", DefaultMaxDataFiles,
-		"Maximum number of RuleData files carried by one Engine")
+		"Maximum number of RuleData files carried by one Engine (the plugin accepts at most 4096)")
 	fs.IntVar(&l.MaxStreams, "xds-max-streams", DefaultMaxStreams,
 		"Maximum concurrent ECDS streams per replica")
 	fs.IntVar(&l.MaxStreamsPerIdentity, "xds-max-streams-per-identity", DefaultMaxStreamsPerIdentity,

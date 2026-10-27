@@ -332,11 +332,9 @@ func acceptedConfiguration(engine *wafv1alpha1.Engine) *wafv1alpha1.EngineAccept
 // -----------------------------------------------------------------------------
 
 // messageEnvelopeBytes reserves the DiscoveryResponse wrapper the xDS server
-// adds around a rendered resource (version_info, nonce, type_url, the
-// control-plane identifier and the Any framing). grpc.MaxSendMsgSize applies to
-// the whole message, so a resource that only fits without the wrapper is Ready
-// but undeliverable.
-const messageEnvelopeBytes = 1 << 10
+// adds around a rendered resource. It lives in the xds package because the
+// startup limits check needs the same reservation.
+const messageEnvelopeBytes = xds.MessageEnvelopeBytes
 
 func validateContentLimits(content assemble.Content, limits xds.Limits) error {
 	if len(content.Rules) > limits.MaxMessageBytes {
