@@ -214,9 +214,10 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 # local worktree of it to build without publishing anything, e.g.:
 #   make demo WASM_PLUGIN_DIR=/path/to/coraza-proxy-wasm-ecds
 # The build runs from an archive of WASM_PLUGIN_VERSION inside a temporary
-# directory: the worktree is read-only for this target (no checkout, no new
-# files), so a local branch and its uncommitted work are left untouched.
-# Commit a plugin change and point WASM_PLUGIN_VERSION at it to build it.
+# directory: a user-provided directory is read-only for this target (no clone,
+# no fetch, no checkout, no new files), so a local branch and its uncommitted
+# work are left untouched. The commit must already exist there; commit a plugin
+# change and point WASM_PLUGIN_VERSION at it to build it.
 WASM_PLUGIN_REPO ?= https://github.com/corazawaf/coraza-proxy-wasm
 WASM_PLUGIN_VERSION ?= 31bca96
 WASM_PLUGIN_DIR ?= $(CURDIR)/.cache/coraza-proxy-wasm
@@ -233,13 +234,20 @@ wasm.plugin: ## Build the ECDS-aware coraza-proxy-wasm module (skipped when WASM
 		echo "wasm.plugin: reusing $(WASM_MODULE)"; \
 		exit 0; \
 	fi; \
-	if [ ! -e "$(WASM_PLUGIN_DIR)/.git" ]; then \
-		echo "wasm.plugin: cloning $(WASM_PLUGIN_REPO)"; \
-		git clone --quiet "$(WASM_PLUGIN_REPO)" "$(WASM_PLUGIN_DIR)"; \
+	default_dir="$(CURDIR)/.cache/coraza-proxy-wasm"; \
+	if [ "$(WASM_PLUGIN_DIR)" = "$$default_dir" ]; then \
+		if [ ! -e "$$default_dir/.git" ]; then \
+			echo "wasm.plugin: cloning $(WASM_PLUGIN_REPO)"; \
+			git clone --quiet "$(WASM_PLUGIN_REPO)" "$$default_dir"; \
+		fi; \
+		if ! git -C "$$default_dir" rev-parse --verify --quiet "$(WASM_PLUGIN_VERSION)^{commit}" >/dev/null; then \
+			echo "wasm.plugin: fetching $(WASM_PLUGIN_VERSION)"; \
+			git -C "$$default_dir" fetch --quiet --all --tags; \
+		fi; \
 	fi; \
 	if ! git -C "$(WASM_PLUGIN_DIR)" rev-parse --verify --quiet "$(WASM_PLUGIN_VERSION)^{commit}" >/dev/null; then \
-		echo "wasm.plugin: fetching $(WASM_PLUGIN_VERSION)"; \
-		git -C "$(WASM_PLUGIN_DIR)" fetch --quiet --all --tags; \
+		echo "wasm.plugin: pinned plugin commit $(WASM_PLUGIN_VERSION) is not published in $(WASM_PLUGIN_REPO); pass WASM_PLUGIN_DIR=<ecds/ecds-consumer worktree>" >&2; \
+		exit 1; \
 	fi; \
 	work=$$(mktemp -d); \
 	trap 'rm -rf "$$work"' EXIT; \

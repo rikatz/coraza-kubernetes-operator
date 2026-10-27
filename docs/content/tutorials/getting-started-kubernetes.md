@@ -20,10 +20,13 @@ make demo WASM_PLUGIN_DIR=/path/to/coraza-proxy-wasm-ecds
 ```
 
 The default pinned plugin commit (`WASM_PLUGIN_VERSION`) is not published yet, so
-`make demo` without `WASM_PLUGIN_DIR` cannot clone it. Point `WASM_PLUGIN_DIR` at a
+`make demo` without `WASM_PLUGIN_DIR` cannot clone it and fails with
+`pinned plugin commit <ref> is not published in <repo>`. Point `WASM_PLUGIN_DIR` at a
 sibling worktree on the `ecds/ecds-consumer` branch (Path B, RuleData delivery). The
-build runs from a temporary archive of the pinned commit, so your worktree is never
-checked out, detached, or written to; the module lands in `.cache/wasm/main.wasm`.
+build runs from a temporary archive of the pinned commit: a worktree you provide is
+never cloned into, fetched, checked out, or written to, so its branch and uncommitted
+work are untouched. The commit must already exist in that worktree; the module lands in
+`.cache/wasm/main.wasm`.
 
 It builds the plugin with TinyGo, bundles it into the operator image, creates the cluster
 with Istio (Sail operator), installs the operator, applies `config/samples`, and asserts that
