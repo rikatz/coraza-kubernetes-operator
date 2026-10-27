@@ -499,35 +499,54 @@ func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
 		})
 	}
 
-	// Coraza cuts at the first single space, so an extra space or a tab after
-	// "Include" is part of the file name and resolves nothing: a zero-rule WAF
-	// behind a Ready Engine.
-	for _, rules := range []string{
-		"Include  \"@owasp_crs/*.conf\"",
-		"Include  @owasp_crs/*.conf",
-		"Include \t@owasp_crs/*.conf",
-		"Include  blocklist.conf",
-	} {
-		t.Run(rules, func(t *testing.T) {
-			err := ValidateIncludes(rules, map[string][]byte{})
-			require.Error(t, err, "only one space may separate Include from the target")
-			assert.Contains(t, err.Error(), "exactly one space", "the error must stay static")
-			assert.Contains(t, err.Error(), "@owasp_crs/*.conf", "the error must name the allowed targets")
-		})
-	}
-
 	for _, rules := range []string{
 		"Include \"@owasp_crs/*.conf\"",
 		"Include @owasp_crs/*.conf",
+		"Include  @owasp_crs/*.conf",
+		"Include \t@owasp_crs/*.conf",
 		"Include \"@crs-setup-conf\"",
 		"Include \"blocklist.conf\"",
 		"Include blocklist.conf",
 	} {
 		t.Run(rules, func(t *testing.T) {
 			assert.NoError(t, ValidateIncludes(rules, map[string][]byte{}),
-				"unquoted and matched-double-quoted targets are what Coraza resolves")
+				"Coraza trims the argument, so quotes and padding resolve the same target")
 		})
 	}
+}
+
+// TestValidateIncludesTrimsTargetLikeCoraza covers the whitespace Coraza trims
+// around the Include argument: the guard must resolve the same name Coraza
+// opens. Otherwise a padded name is never scanned, while Coraza still reads the
+// real file and a SecDebugLog inside it creates a host file during validation.
+func TestValidateIncludesTrimsTargetLikeCoraza(t *testing.T) {
+	const marker = "padding-marker-7b12"
+	debugLog := filepath.Join(t.TempDir(), marker+".log")
+	dataFiles := map[string][]byte{
+		"blocklist.data": []byte("SecDebugLog " + debugLog + "\n"),
+	}
+
+	for _, rules := range []string{
+		"Include \u00a0blocklist.data",
+		"Include \"blocklist.data \"",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			err := ValidateIncludes(rules, dataFiles)
+			require.Error(t, err, "Coraza trims the argument, so the file must be scanned")
+			assert.Contains(t, err.Error(), "blocklist.data")
+			assert.Contains(t, err.Error(), "SecDebugLog is not allowed")
+			assert.NotContains(t, err.Error(), marker, "the error must stay static")
+
+			err = ValidateRuleSourceRules(rules, "padding-rs", dataFiles)
+			require.Error(t, err)
+			_, statErr := os.Stat(debugLog)
+			assert.True(t, os.IsNotExist(statErr), "rejected rules must not create the debug log on the host")
+		})
+	}
+
+	assert.NoError(t, ValidateIncludes("Include blocklist.data", map[string][]byte{
+		"blocklist.data": []byte("word\nother-word\n"),
+	}), "a clean RuleData file is still accepted")
 }
 
 // TestValidateIncludesRejectsUnresolvableGlobs covers globs the plugin cannot

@@ -62,13 +62,14 @@ zero-rule WAF, and the `.data` files are not SecLang, so including one made the
 plugin NACK the push while the Engine reported `Ready`. An `Include` argument may
 also be unquoted or wrapped in one matched pair of double quotes only, as Coraza
 strips just that pair: a single-quoted or half-quoted target named a different
-file, building either an empty WAF or a NACK. Exactly one space may separate
-`Include` from the target: Coraza cuts the line at the first single space, so a
-target preceded by extra spaces or a tab resolved no file at all, again leaving a
-zero-rule WAF behind a `Ready` Engine. Without those rejections the Engine
-reported `Ready` while the plugin either enforced nothing or kept rejecting the
-configuration. A RuleSet whose rules `Include` a RuleData file name containing
-`/` is rejected as well.
+file, building either an empty WAF or a NACK. The guard resolves the target the
+way Coraza does: it trims the argument, so extra spaces or a tab before the name
+resolve to that file and its content is scanned. A target that still carries a
+quote after the one matched pair of double quotes Coraza strips is rejected,
+because Coraza reads the quote as part of the file name. Without those
+rejections the Engine reported `Ready` while the plugin either enforced nothing
+or kept rejecting the configuration. A RuleSet whose rules `Include` a RuleData
+file name containing `/` is rejected as well.
 
 ## RuleData Size Limits
 
