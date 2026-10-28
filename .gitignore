@@ -96,3 +96,6 @@ catalog/bundles/
 # tool binaries
 tools/github_project_manager/github_project_manager
 /kubectl-coraza
+
+# Local checkouts fetched by the demo (upstream coraza-proxy-wasm)
+.cache/

@@ -2,77 +2,93 @@
 title: "Istio WASM Integration"
 linkTitle: "Istio WASM Integration"
 weight: 30
-description: "How the operator integrates with Istio using WebAssembly plugins."
+description: "How the operator injects the Coraza WAF into Istio gateways with EnvoyFilter and ECDS."
 ---
 
-The Coraza Kubernetes Operator integrates with Istio by deploying a WebAssembly (WASM) plugin into Envoy proxies attached to Kubernetes Gateways. This page explains how that integration works.
+The Coraza Kubernetes Operator integrates with Istio by patching the Gateway's Envoy
+configuration directly (an `EnvoyFilter`) and streaming the WAF configuration to the proxy
+over `ExtensionConfigDiscoveryService` (ECDS). No `WasmPlugin` resource is created.
 
-## How Istio WasmPlugin Works
+## How the integration works
 
-Istio provides a [WasmPlugin](https://istio.io/latest/docs/reference/config/proxy_extensions/wasm-plugin/) resource that instructs Envoy to load and execute a WASM module. The operator creates WasmPlugin resources to inject the Coraza WAF into the request processing pipeline.
+For each accepted Engine the operator:
 
-When a WasmPlugin is applied, Istio:
+1. Creates or updates an **EnvoyFilter** targeting the Gateway's pods (GEP-1762
+   `gateway.networking.k8s.io/gateway-name` label) with two patches:
+   - a `CLUSTER` patch adding `coraza_wasm`, the HTTPS cluster that serves the module, and
+   - an `HTTP_FILTER` patch inserting the WASM filter before the router, subscribed to ECDS
+     for the Engine's resource name.
+2. Serves the filter configuration over **ECDS** on its own listener (port 18080, HTTP/2),
+   authenticated with the Gateway's ServiceAccount token and a CA-pinned TLS channel.
+3. Serves the module bytes over HTTPS at `/wasm/<sha256>.wasm` (or the URL from
+   `spec.driver.wasm.url`); Envoy fetches them once, verifies the digest, and caches the
+   module, so rule updates never carry the binary again.
 
-1. Downloads the WASM binary from the specified OCI registry.
-2. Loads it into the Envoy proxy as a filter.
-3. Routes HTTP requests through the WASM filter before forwarding them to the backend.
+Until the ECDS resource arrives, Envoy applies a **deny-all RBAC** default config, so a
+Gateway whose Engine is not accepted never forwards traffic unfiltered.
 
-## The coraza-proxy-wasm Plugin
+## The plugin
 
-The WASM module used by the operator is [coraza-proxy-wasm](https://github.com/networking-incubator/coraza-proxy-wasm). It is a purpose-built Envoy WASM filter that:
+The WASM module is an ECDS-aware build of
+[coraza-proxy-wasm](https://github.com/corazawaf/coraza-proxy-wasm). It runs the
+Coraza WAF engine inside Envoy and blocks or allows requests based on the rules it is given.
 
-- Runs the Coraza WAF engine inside Envoy.
-- Polls the operator's RuleSet cache server for rule updates.
-- Evaluates incoming HTTP requests against the loaded rules.
-- Blocks or allows requests based on rule outcomes.
+The operator's ECDS resource is the plugin's schema-versioned configuration: the assembled
+SecLang text, the RuleData files, the failure policy, and the engine identity. The module
+itself is referenced by URL and digest. See the [ECDS plugin
+contract]({{< relref "/reference/ecds-plugin-contract" >}}) for the exact payload.
 
-The plugin is distributed as an OCI image. The operator uses a built-in default image reference, which can be overridden per Engine or globally via the `--default-wasm-image` flag.
+## Rule updates
 
-## WasmPlugin Resource Generation
+Rules are pushed, not polled. When a RuleSet changes and the Engine re-accepts, the operator
+publishes a new ECDS snapshot; Envoy reconfigures the filter in place and the Gateway pods do
+not restart. There is no cache server, no polling interval, and no token in the rule payload.
 
-When an Engine is reconciled, the operator creates a WasmPlugin resource using server-side apply. The WasmPlugin:
+If the plugin rejects a payload, Envoy NACKs the update and keeps the previous configuration.
 
-- References the WASM OCI image.
-- Targets Gateway pods using the label selector derived from the Engine's `target.name` (via the GEP-1762 `gateway.networking.k8s.io/gateway-name` label).
-- Passes configuration to the WASM plugin, including the cache server URL and the RuleSet key.
-- Sets the failure policy (fail-open or fail-closed).
+Each applied change is visible on both sides without raising log levels:
 
-The operator watches WasmPlugin resources it creates and filters out update events to prevent reconcile loops. Only create and delete events trigger re-reconciliation.
+```
+# operator
+ECDS configuration published  version=sha256:... ruleSources=4 ruleBytes=... dataFiles=0
+# proxy acknowledgement seen by the operator
+ECDS configuration accepted by proxy  resource=coraza.waf.<ns>.<engine>.<uid>  version=sha256:...
+```
 
-## Target Selection and Gateway Matching
+Envoy itself only logs failures by default. Set `wasm=debug` on the proxy admin port
+(`curl -X POST localhost:15000/logging?wasm=debug`) to see the plugin instance being
+recreated. The module is not downloaded again: Envoy keeps it in its digest-keyed code cache, so a rule
+change is a kilobyte-sized message. The compiled module is not re-instantiated either — the
+VM is keyed by `vm_id` plus the module bytes — and only the WAF is rebuilt from the new
+configuration.
 
-The Engine's `target` field identifies the Gateway by name. The operator derives the workload label selector using the GEP-1762 convention — Gateway API implementations label Gateway pods with:
+## Target selection
+
+The Engine's `target` field identifies the Gateway by name. The operator derives the
+workload label selector using the GEP-1762 convention — Gateway API implementations label
+Gateway pods with:
 
 ```
 gateway.networking.k8s.io/gateway-name: <gateway-name>
 ```
 
-The `target.provider` field (default: `Istio`) identifies the infrastructure provider, which determines which driver types are valid for the Engine. This field is immutable after creation — to switch providers, create a new Engine resource. This ensures the controller does not need to clean up and recreate child resources (WasmPlugin, NetworkPolicy, ServiceAccount tokens) from the previous driver.
+The `target.provider` field (default: `Istio`) identifies the infrastructure provider, which
+determines which driver types are valid for the Engine. This field is immutable after
+creation — to switch providers, create a new Engine resource.
 
-## Poll-Based Rule Updates
+## Custom modules
 
-The WASM plugin running inside Envoy polls the operator's cache server at the interval specified by `pollIntervalSeconds` (default: 15 seconds). The polling flow is:
+By default the operator serves the module bundled in its image. To use another build, set
+both fields on the Engine (see [Deploying a WAF
+Engine]({{< relref "/howto/deploying-waf-engine" >}})):
 
-1. The plugin sends `GET /rules/{namespace/name}/latest` to check the current UUID.
-2. If the UUID has changed since the last fetch, the plugin sends `GET /rules/{namespace/name}` to download the new rules.
-3. The plugin loads the new rules and begins enforcing them on subsequent requests.
+```yaml
+spec:
+  driver:
+    type: wasm
+    wasm:
+      url: "https://files.example.com/coraza-proxy-wasm/v0.6.0/plugin.wasm"
+      sha256: "<64 lowercase hex characters>"
+```
 
-This design allows rule updates without restarting Envoy or the Gateway pods.
-
-## Cache Server Connectivity
-
-For the WASM plugin to reach the cache server, the operator:
-
-1. Creates a **ServiceEntry** and **DestinationRule** to make the cache server discoverable within the Istio mesh (when `--operator-name` is set).
-2. Creates a **NetworkPolicy** to allow Gateway pods to connect to the cache server port.
-3. Issues a **ServiceAccount token** for the WASM plugin to authenticate with the cache server.
-
-## Custom WASM Images
-
-Users can build and deploy custom WASM plugins by:
-
-1. Building the `coraza-proxy-wasm` module from source using TinyGo.
-2. Packaging it as an OCI image.
-3. Specifying the image in the Engine's `spec.driver.wasm.image` field.
-
-If the image is in a private registry, an `imagePullSecret` can be specified to provide authentication credentials.
+The URL must be HTTPS, and Envoy refuses bytes that do not match the digest.

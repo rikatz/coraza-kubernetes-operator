@@ -9,6 +9,44 @@ This tutorial walks you through installing the Coraza Kubernetes Operator on a K
 
 By the end, you will have a working WAF protecting a sample application behind a Kubernetes Gateway.
 
+## Local demo in one command
+
+To see the whole flow on a local [KIND](https://kind.sigs.k8s.io/) cluster — operator,
+Gateway, demo rules, and the real `coraza-proxy-wasm` module — run from the repository root
+with a local checkout of the ECDS-ready plugin:
+
+```bash
+make demo WASM_PLUGIN_DIR=/path/to/coraza-proxy-wasm-ecds
+```
+
+The default pinned plugin commit (`WASM_PLUGIN_VERSION`) is not published yet, so
+`make demo` without `WASM_PLUGIN_DIR` cannot clone it and fails with
+`pinned plugin commit <ref> is not published in <repo>`. Point `WASM_PLUGIN_DIR` at a
+sibling worktree on the `ecds/ecds-consumer` branch (Path B, RuleData delivery). The
+build runs from a temporary archive of the pinned commit: a worktree you provide is
+never cloned into, fetched, checked out, or written to, so its branch and uncommitted
+work are untouched. The commit must already exist in that worktree; the module lands in
+`.cache/wasm/main.wasm`.
+
+It builds the plugin with TinyGo, bundles it into the operator image, creates the cluster
+with Istio (Sail operator), installs the operator, applies `config/samples`, and asserts that
+a normal request passes while the demo attacks are blocked:
+
+```
+  allowed  GET /                      -> 200 (want 200)
+  blocked  GET /?q=evilmonkey         -> 403 (want 403)
+  blocked  GET /?q=evildata           -> 403 (want 403, @pmFromFile RuleData)
+```
+
+Requirements: Docker, `kind`, `helm`, `kubectl`, and TinyGo 0.34 (`TINYGO=/path/to/tinygo`
+overrides the default `$HOME/bin/tinygocoraza/tinygo/bin/tinygo`). The first run downloads
+the Go 1.23 toolchain TinyGo needs. The built module replaces the fixture in
+`internal/assets`; restore it with `git checkout internal/assets`. That is the only file
+`make demo` changes in the operator checkout, and the plugin worktree is read-only for
+the build.
+
+The rest of this tutorial assumes you bring your own cluster.
+
 ## Prerequisites
 
 Before you begin, ensure you have:

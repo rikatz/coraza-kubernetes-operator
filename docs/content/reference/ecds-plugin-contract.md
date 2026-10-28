@@ -1,0 +1,197 @@
+---
+title: "ECDS Plugin Contract"
+linkTitle: "ECDS Plugin Contract"
+weight: 40
+description: "How the Coraza Kubernetes Operator delivers rules and data files to the ECDS-aware coraza-proxy-wasm plugin."
+---
+
+This page is the shared contract between the Coraza Kubernetes Operator (CKO) and the
+ECDS-aware `coraza-proxy-wasm` plugin. It is versioned independently of either repository.
+`schema_version` gates compatibility.
+
+## Runtime configuration JSON
+
+The ECDS resource carries this JSON in `PluginConfig.configuration`
+(`google.protobuf.StringValue`):
+
+```json
+{
+  "schema_version": 1,
+  "engine": "checkout",
+  "namespace": "shop",
+  "engine_uid": "11111111-1111-4111-8111-111111111111",
+  "driver_type": "wasm",
+  "empty_rules_policy": "Reject",
+  "failure_policy": "fail",
+  "enable_filter_state_logs": true,
+  "rules": "SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\"",
+  "data_files": {
+    "blocked.txt": "YXR0YWNrCg=="
+  }
+}
+```
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `schema_version` | integer | Must be `1`; any other value fails plugin configuration. |
+| `engine`, `namespace` | string | Engine identity; informational and metrics labels. |
+| `engine_uid` | string | UID of the Engine; prevents recreate/snapshot confusion. |
+| `driver_type` | string | `wasm`. |
+| `empty_rules_policy` | string | `Reject` (default) or `Allow`. Empty `rules` is rejected unless this is `Allow`. |
+| `failure_policy` | string | `fail` or `allow`; maps to the plugin's internal policy and to the native WASM `failure_policy`. |
+| `enable_filter_state_logs` | boolean (JSON only) | Mirrors `Engine.spec.observability.mode == Enabled`. |
+| `rules` | string | Complete assembled SecLang text, byte-exact. |
+| `data_files` | object(string -> base64) | Merged RuleData files, last-listed wins; base64 of raw bytes. |
+
+Rules for both sides:
+
+- No token, token path, polling interval, HTTP rule-server address, TLS material, or
+  per-pod identifier appears in the payload.
+- Unknown schema versions fail explicitly; the plugin returns
+  `OnPluginStartStatusFailed` so Envoy retains the prior configuration.
+- The plugin builds synchronously in `OnPluginStart`: validate -> decode base64 ->
+  validate filenames -> construct virtual filesystem -> `coraza.NewWAF` -> publish the
+  WAF. It performs no network call and starts no timers or tickers.
+- Failure policy mapping: `fail` -> native `FAIL_CLOSED` + plugin block-on-error;
+  `allow` -> native `FAIL_OPEN` + plugin allow-on-error.
+- Size limits are enforced before allocation: `max_payload_bytes` (16 MiB),
+  `max_decoded_bytes` (12 MiB), `max_data_files` (4096), `max_filename_len` (253).
+  These are compile-time plugin caps as well as operator configuration: the operator
+  rejects flags above them at startup, and the plugin NACKs any payload above them.
+  They are not part of this payload.
+- An explicitly allowed empty ruleset is an intentional no-op WAF, not a missing
+  configuration.
+- Release artifacts: raw `plugin.wasm`, `plugin.wasm.sha256` (lowercase hex),
+  `plugin.manifest.yaml` (`schema_version`, module name, file, sha256, git SHA,
+  Coraza version, proxy-wasm SDK version). CKO bundles exactly these bytes and manifest.
+
+## Rule text references
+
+Rule text may reference only what both sides can resolve. The operator validates these
+references before an Engine accepts the configuration:
+
+- `Include` targets: `@recommended-conf`, `@demo-conf`, `@ftw-conf`,
+  `@crs-setup-conf`, `@owasp_crs/*.conf`, a literal `@owasp_crs/<file>.conf`, and
+  bare RuleData file names. The `<file>` must have a non-empty first segment, no
+  empty segments, no `.` or `..` segments, and a literal must end in `.conf`: the
+  other files in the embedded tree are not rule text. Coraza fails to parse the
+  `.data` files (`unknown directive`, so the plugin NACKs the push) and the
+  `.conf.example` templates hold no active rules (so the WAF compiles with zero
+  rules); either way the Engine reports `Ready` while the plugin rejects the
+  push or enforces nothing. Any other extension is rejected too, including for a
+  literal `crs/<file>` target.
+  The argument may be unquoted or wrapped in double quotes: Coraza strips every
+  leading and trailing `"` from a wholly quoted argument of at least three bytes,
+  and nothing else. A single-quoted or half-quoted target is rejected, because
+  the plugin would read the quote as part of the file name.
+  A non-glob target is trimmed like Coraza trims the name it opens, so extra
+  spaces or a tab before the name resolve to that file and its content is
+  scanned. A glob is not trimmed: Coraza expands it with the argument as written,
+  so a padded glob matches nothing.
+  A glob is accepted only as the exact unpadded `@owasp_crs/*.conf`, one segment
+  after the alias: the plugin expands it against the embedded CRS tree, and Coraza
+  only logs an empty glob result instead of failing, so the operator cannot tell
+  whether a narrower or broader pattern matches rule files
+  (`@owasp_crs/REQUEST-*.conf` compiles rules), nothing at all
+  (`@owasp_crs/NOSUCH-*.conf` or a padded pattern), non-rule files
+  (`@owasp_crs/*.data`, which NACKs), or a directory the plugin does not have
+  (`@owasp_crs/crs/*.conf`, `@owasp_crs/*/*.conf`): each would either NACK the
+  push or enforce nothing while the Engine reports `Ready`.
+  The bare `@owasp_crs`, the trailing-slash, `.` and double-slash variants name the
+  embedded directory rather than a file and are rejected, as is any other
+  `@`-prefixed target: the plugin cannot resolve them.
+- A bare RuleData file name in `Include` is resolved from the RuleSet's merged
+  RuleData, so the operator checks it at two points. Per-RuleSource validation has no
+  data files and defers the name: the RuleSource is `Validated`, not degraded. The
+  RuleSet's aggregate compilation supplies the merged files and rejects the RuleSet
+  when the name is absent (`Degraded`, `InvalidRuleSet`). An `Include` of a RuleData
+  file scans the included file's content as rule text too, recursively.
+- `@pmFromFile` / `@pmf` targets: a RuleData file name, or `crs/...` for the CRS data
+  files the plugin serves from its embedded tree. A leading `./` is ignored, as Coraza
+  path-cleans the argument.
+- Directives that open or create host files during compilation are rejected:
+  `SecDebugLog`, `SecUploadDir`, and `SecUploadKeepFiles` with any value other than
+  `Off`. This covers rule text and any RuleData file the rules `Include` (an included
+  file is parsed as rule text). `@pmFromFile` data is not SecLang and is not scanned.
+  `SecDebugLogLevel` and `SecAuditLogType` are accepted. `SecAuditLog` is accepted only
+  with `/dev/stdout` or `/dev/stderr`: the plugin's serial audit writer writes to those
+  streams and opens every other target with `os.OpenFile`, which the WASM sandbox
+  cannot do, so any other target would NACK the push while the Engine reports `Ready`.
+  Under TinyGo the `Concurrent`, `HTTPS` and `Syslog` `SecAuditLogType` writers are
+  no-ops, so audit logging to those sinks is silently dropped: only `/dev/stdout` and
+  `/dev/stderr` are meaningful. The operator's validation WAF always pins its own audit
+  log to `/dev/stdout`, a stream its serial writer opens without a file descriptor.
+
+Known trades of this contract:
+
+- The operator cannot verify the embedded file list. A wrong literal file under
+  `@owasp_crs/` (for example `@owasp_crs/typo.conf`) or under `crs/` passes
+  validation, the Engine reports `Ready`, and the plugin NACKs the push; the stream
+  stays fail-closed and the operator logs the retry budget being exhausted. Use the
+  `@owasp_crs/*.conf` glob to refer to the whole CRS rule tree, which is guaranteed to
+  match all 27 embedded rule files.
+- `Include` targets are matched by form, not by existence: a bare RuleData name is
+  accepted per RuleSource and checked by aggregate RuleSet validation against the
+  merged files.
+
+## Cold start
+
+A proxy caches the module by `sha256` and fetches it only when it first applies a
+configuration. A proxy whose cache is empty rejects that first push and never asks for the
+resource again on its own, so the operator ends the stream with a retryable `Unavailable`
+(at most three times per version). Envoy resubscribes after the fetch has finished, applies
+the same configuration, and acknowledges it; the module is not sent again after that. A
+proxy that keeps rejecting stays fail-closed and the operator logs `ECDS retry budget
+exhausted`.
+
+## ECDS resource shape
+
+One `TypedExtensionConfig` per Engine, named
+`coraza.waf.<namespace>.<engine-name>.<engine-uid>`:
+
+```yaml
+"@type": type.googleapis.com/envoy.config.core.v3.TypedExtensionConfig
+name: coraza.waf.shop.checkout.11111111-1111-4111-8111-111111111111
+typed_config:
+  "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+  config:
+    name: coraza.waf.shop.checkout.11111111-1111-4111-8111-111111111111
+    root_id: coraza.waf.shop.checkout.11111111-1111-4111-8111-111111111111
+    failure_policy: FAIL_CLOSED
+    vm_config:
+      vm_id: coraza-11111111-1111-4111-8111-111111111111
+      runtime: envoy.wasm.runtime.v8
+      code:
+        remote:
+          # The bundled module is served by the operator; a custom
+          # spec.driver.wasm.url module replaces this URL.
+          http_uri:
+            uri: https://coraza-operator.coraza-system.svc.cluster.local:18080/wasm/<64hex>.wasm
+            cluster: coraza_wasm
+            timeout: 10s
+          sha256: <64hex>
+    configuration:
+      "@type": type.googleapis.com/google.protobuf.StringValue
+      value: "<runtime configuration JSON>"
+```
+
+The wire profile is streaming state-of-the-world `ExtensionConfigDiscoveryService`
+scoped to one resource per stream. Delta and ADS are out of scope.
+
+## Versions and hashes
+
+- Resource identity includes the Engine UID, so a recreated Engine never reuses a
+  deleted Engine's cached configuration.
+- The ECDS `version_info` is the engine-version hash, not the hash of the rendered
+  resource: `sha256:<64 lowercase hexadecimal characters>`.
+- `ruleSetHash = sha256(canonical(rule text + sorted filename list + raw bytes))`.
+- The Engine version hashes schema and rendering versions, Engine identity, the RuleSet
+  UID and content hash, failure and empty-rules policies, observability, binary URL and
+  WASM digest, and VM settings.
+- No timestamp, Kubernetes `resourceVersion`, nonce, replica identity, token, or CA
+  material enters a content hash. Rule text is byte-sensitive: whitespace and comment
+  changes change the version.
+- Versions are opaque, not monotonic. Reverting to identical effective content may
+  reproduce an older version.
+- A replica publishes only when it reconstructs the exact bytes whose version matches
+  the Engine's accepted configuration.
