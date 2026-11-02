@@ -65,6 +65,8 @@ If you installed the operator through OperatorHub with automatic approval, OLM h
 
 If you chose manual approval, pending upgrades appear in the OpenShift web console under **Operators > Installed Operators**. Approve the upgrade to proceed.
 
+OLM installs do not ship a serving certificate Secret. The operator generates a CA and leaf on first start, stores them in the `coraza-kubernetes-operator-serving-cert` Secret in its namespace, and reuses them across restarts; no manual certificate step is required. See [Helm values]({{< relref "/reference/helm-values" >}}) for `tls.existingSecret` when a certificate manager owns the certificate.
+
 ## Checking Release Notes
 
 Before upgrading, review the release notes for any breaking changes or migration steps:

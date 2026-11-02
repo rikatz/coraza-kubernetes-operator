@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -24,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -115,6 +117,29 @@ func main() {
 
 	rulesetCache := setupRuleSetCache(cfg)
 
+	// Helm installs mount a chart-managed Secret and keep using it. OLM and
+	// static-manifest installs have no way to mint one, so the operator loads
+	// or generates its own and stores it in a Secret both paths can share.
+	certCtx, cancelCert := context.WithTimeout(context.Background(), 30*time.Second)
+	certDNSNames, certIPs := servingCertSANs(cfg, podNamespace)
+	servingCert, err := xds.EnsureServingCert(certCtx, xds.ServingCertOptions{
+		Client:      kubeClient,
+		Namespace:   podNamespace,
+		SecretName:  cfg.servingCertSecretName(),
+		CertDir:     cfg.xdsCertDir,
+		CertName:    cfg.xdsCertName,
+		KeyName:     cfg.xdsKeyName,
+		CAPath:      cfg.xdsCAPath,
+		DNSNames:    certDNSNames,
+		IPAddresses: certIPs,
+		Logger:      setupLog.WithName("xds-cert"),
+	})
+	cancelCert()
+	if err != nil {
+		setupLog.Error(err, "unable to provide the xDS serving certificate")
+		os.Exit(1)
+	}
+
 	xdsDeps, err := xds.NewDependencies(xds.Config{
 		KubeClient:    kubeClient,
 		Reader:        mgr.GetClient(),
@@ -126,6 +151,7 @@ func main() {
 		CertName:      cfg.xdsCertName,
 		KeyName:       cfg.xdsKeyName,
 		CAPath:        cfg.xdsCAPath,
+		ServingCert:   servingCert,
 		Limits:        cfg.xdsLimits,
 		Registry:      metrics.Registry,
 		Logger:        ctrl.Log.WithName("xds"),
@@ -212,6 +238,7 @@ type config struct {
 	xdsCertDir       string
 	xdsCertName      string
 	xdsKeyName       string
+	xdsCertSecret    string
 	xdsLimits        xds.Limits
 }
 
@@ -259,6 +286,8 @@ func parseFlags() config {
 		"The name of the xDS serving certificate file")
 	flag.StringVar(&cfg.xdsKeyName, "xds-key-name", "tls.key",
 		"The name of the xDS serving key file")
+	flag.StringVar(&cfg.xdsCertSecret, "xds-cert-secret", "",
+		"The Secret the operator creates and reuses for its xDS serving certificate when no certificate is mounted; defaults to <operator-name>-serving-cert")
 	cfg.xdsLimits = xds.DefaultLimits()
 	cfg.xdsLimits.AddFlags(flag.CommandLine)
 
@@ -320,6 +349,62 @@ func buildECDSConfig(cfg config, podNamespace string, ca *xds.CASource) (control
 		CAPEM:            caPEM,
 		CASource:         ca,
 	}, assetBaseURL, nil
+}
+
+// servingCertSecretName is the Secret the operator writes when no certificate
+// is mounted. The chart and the OLM CSV both pass --operator-name, so this is
+// the same name the chart uses when it generates the Secret itself.
+func (c config) servingCertSecretName() string {
+	if c.xdsCertSecret != "" {
+		return c.xdsCertSecret
+	}
+	name := c.operatorName
+	if name == "" {
+		name = "coraza-kubernetes-operator"
+	}
+	return name + "-serving-cert"
+}
+
+// servingCertSANs lists every name a Gateway may dial the operator by. The
+// advertise address is included so a custom address keeps working.
+func servingCertSANs(cfg config, podNamespace string) ([]string, []net.IP) {
+	names := map[string]struct{}{}
+	add := func(name string) {
+		if name != "" {
+			names[name] = struct{}{}
+		}
+	}
+	service := cfg.operatorServiceName
+	if service == "" {
+		service = cfg.operatorName
+	}
+	if service != "" {
+		add(service)
+		add(service + "." + podNamespace)
+		add(service + "." + podNamespace + ".svc")
+		add(service + "." + podNamespace + ".svc.cluster.local")
+	}
+
+	var ips []net.IP
+	if cfg.xdsAdvertiseAddress != "" {
+		host := cfg.xdsAdvertiseAddress
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if ip := net.ParseIP(host); ip != nil {
+			ips = append(ips, ip)
+		} else {
+			add(host)
+		}
+	}
+
+	dnsNames := make([]string, 0, len(names))
+	for name := range names {
+		dnsNames = append(dnsNames, name)
+	}
+	sort.Strings(dnsNames)
+	return dnsNames, ips
 }
 
 // listenPort returns the port the ECDS listener actually binds. The Engine

@@ -72,6 +72,9 @@ type ListenerConfig struct {
 	CertName    string
 	KeyName     string
 	CAPath      string
+	// ServingCert is used when no certificate files are mounted. The listener
+	// serves it directly instead of waiting for files to appear.
+	ServingCert *ServingCert
 }
 
 // Listener binds one TLS listener and dispatches ALPN h2 connections to the
@@ -102,12 +105,17 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 	config = config.withDefaults()
 	limits = limits.WithDefaults()
 
-	certs := newCertWatcher(config.CertDir, config.CertName, config.KeyName, logger)
+	certs := newCertWatcher(config.CertDir, config.CertName, config.KeyName, config.ServingCert, logger)
 
 	// The CA is loaded on demand and cached by CASource. Ready retries a
 	// missing or unparsable bundle so a late-mounted Secret recovers, and the
 	// Engine reconciler shares the same source so new EnvoyFilters carry it.
 	ca := NewCASource(config.CAPath, logger)
+	if config.ServingCert != nil {
+		// The certificate was loaded from (or generated into) a Secret, so the
+		// mounted files may never appear. Use its CA directly.
+		ca.pem = config.ServingCert.CAPEM
+	}
 	if ca.PEM() == nil {
 		logger.Error(errors.New("no certificate found"), "Failed to read the xDS CA bundle", "path", config.CAPath)
 	}
@@ -418,17 +426,21 @@ func (l *Listener) shutdown() {
 type certWatcher struct {
 	certPath string
 	keyPath  string
+	static   *tls.Certificate
 
 	mu      sync.Mutex
 	watcher *certwatcher.CertWatcher
 }
 
-func newCertWatcher(dir, certName, keyName string, logger logr.Logger) *certWatcher {
+func newCertWatcher(dir, certName, keyName string, servingCert *ServingCert, logger logr.Logger) *certWatcher {
 	w := &certWatcher{
 		certPath: filepath.Join(dir, certName),
 		keyPath:  filepath.Join(dir, keyName),
 	}
-	if _, err := w.getOrCreate(); err != nil {
+	if servingCert != nil {
+		w.static = &servingCert.Certificate
+	}
+	if _, err := w.getOrCreate(); err != nil && w.static == nil {
 		// Readiness stays false until a certificate is loaded; the rest of the
 		// operator continues to run.
 		logger.Error(err, "Failed to load the xDS serving certificate")
@@ -457,15 +469,18 @@ func (r *certWatcher) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, er
 	r.mu.Lock()
 	watcher := r.watcher
 	r.mu.Unlock()
-	if watcher == nil {
-		return nil, nil
+	if watcher != nil {
+		return watcher.GetCertificate(nil)
 	}
-	return watcher.GetCertificate(nil)
+	return r.static, nil
 }
 
 // Ready reports whether a certificate is loaded, creating the watcher when
 // the files have appeared so readiness recovers without a restart.
 func (r *certWatcher) Ready() error {
+	if r.static != nil {
+		return nil
+	}
 	if _, err := r.getOrCreate(); err != nil {
 		return fmt.Errorf("xDS serving certificate is not loaded: %w", err)
 	}
@@ -476,6 +491,11 @@ func (r *certWatcher) Ready() error {
 // retries creation instead of failing, so the listener stays up.
 func (r *certWatcher) Start(ctx context.Context) error {
 	watcher, err := r.getOrCreate()
+	if err != nil && r.static != nil {
+		// The static certificate is served directly; incubating file watchers
+		// is unnecessary and would log a missing-file error every few seconds.
+		return nil
+	}
 	for err != nil {
 		select {
 		case <-ctx.Done():

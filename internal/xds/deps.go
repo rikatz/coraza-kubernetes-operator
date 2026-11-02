@@ -43,9 +43,12 @@ type Config struct {
 	CertName      string
 	KeyName       string
 	CAPath        string
-	Limits        Limits
-	Registry      prometheus.Registerer
-	Logger        logr.Logger
+	// ServingCert replaces the mounted certificate when the operator manages
+	// it itself (no files and no Secret yet).
+	ServingCert *ServingCert
+	Limits      Limits
+	Registry    prometheus.Registerer
+	Logger      logr.Logger
 }
 
 // Dependencies is the serving plane constructed once in main and shared with
@@ -115,6 +118,7 @@ func NewDependencies(config Config) (*Dependencies, error) {
 		CertName:    config.CertName,
 		KeyName:     config.KeyName,
 		CAPath:      config.CAPath,
+		ServingCert: config.ServingCert,
 	}, server, NewAssetHandler(manifest, data, metrics), limits, logger.WithName("xds-listener"))
 	if err != nil {
 		return nil, err

@@ -127,6 +127,14 @@ metadata:
   namespace: system
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - update
+- apiGroups:
   - networking.k8s.io
   resources:
   - networkpolicies

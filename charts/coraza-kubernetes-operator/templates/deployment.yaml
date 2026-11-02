@@ -142,6 +142,10 @@ spec:
         - name: xds-serving-cert
           secret:
             secretName: {{ .Values.tls.existingSecret | default (printf "%s-serving-cert" (include "coraza-operator.fullname" .)) }}
+            # The operator generates and stores this Secret when it is absent
+            # (OLM and static-manifest installs), so the pod must start without
+            # it and pick it up once created.
+            optional: true
         {{- if .Values.metrics.certSecret }}
         - name: metrics-certs
           secret:

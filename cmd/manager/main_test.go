@@ -18,6 +18,7 @@ package main
 
 import (
 	"crypto/tls"
+	"net"
 	"path/filepath"
 	"testing"
 
@@ -170,4 +171,49 @@ func TestBuildMetricsServerOptions_SelfSignedWhenNoCert(t *testing.T) {
 	assert.Empty(t, opts.CertDir)
 	assert.Empty(t, opts.CertName)
 	assert.Empty(t, opts.KeyName)
+}
+
+// -----------------------------------------------------------------------------
+// Serving certificate tests
+// -----------------------------------------------------------------------------
+
+func TestServingCertSecretName(t *testing.T) {
+	cases := []struct {
+		name     string
+		operator string
+		explicit string
+		want     string
+	}{
+		{name: "derived from the operator name", operator: "coraza-kubernetes-operator", want: "coraza-kubernetes-operator-serving-cert"},
+		{name: "explicit override", operator: "ignored", explicit: "custom-serving-cert", want: "custom-serving-cert"},
+		{name: "fallback", want: "coraza-kubernetes-operator-serving-cert"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config{operatorName: tc.operator, xdsCertSecret: tc.explicit}
+			assert.Equal(t, tc.want, cfg.servingCertSecretName())
+		})
+	}
+}
+
+func TestServingCertSANs(t *testing.T) {
+	dnsNames, ips := servingCertSANs(config{operatorName: "coraza-kubernetes-operator"}, "coraza-system")
+	assert.Equal(t, []string{
+		"coraza-kubernetes-operator",
+		"coraza-kubernetes-operator.coraza-system",
+		"coraza-kubernetes-operator.coraza-system.svc",
+		"coraza-kubernetes-operator.coraza-system.svc.cluster.local",
+	}, dnsNames)
+	assert.Empty(t, ips)
+
+	dnsNames, ips = servingCertSANs(config{
+		operatorServiceName: "custom",
+		xdsAdvertiseAddress: "203.0.113.10:18080",
+	}, "ns")
+	assert.Contains(t, dnsNames, "custom.ns.svc.cluster.local")
+	require.Len(t, ips, 1)
+	assert.True(t, ips[0].Equal(net.ParseIP("203.0.113.10")))
+
+	dnsNames, _ = servingCertSANs(config{xdsAdvertiseAddress: "xds.example.com"}, "ns")
+	assert.Contains(t, dnsNames, "xds.example.com")
 }

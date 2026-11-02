@@ -30,7 +30,7 @@ helm template coraza-kubernetes-operator \
   --include-crds
 ```
 
-> **GitOps / static renders:** `helm template` cannot reuse the generated serving certificate (see [Serving certificate](#serving-certificate) below) — it mints a fresh CA on every render. Add `--set tls.generate=false` and provide `tls.existingSecret`.
+> **GitOps / static renders:** `helm template` cannot reuse the generated serving certificate (see [Serving certificate](#serving-certificate) below) — it mints a fresh CA on every render. Add `--set tls.generate=false`; the operator then generates and stores the certificate, or set `tls.existingSecret` to provide your own.
 
 ### OpenShift
 
@@ -73,8 +73,8 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 | `logging.stacktraceLevel`                             | string | `error`                                                   | Minimum level for stack traces (`info`, `error`, `panic`). Only used when `development=false`               |
 | `logging.timeEncoding`                                | string | `rfc3339nano`                                             | Timestamp format (`epoch`, `millis`, `nano`, `iso8601`, `rfc3339`, `rfc3339nano`). Only used when `development=false` |
 | `istio.revision`                                      | string | `""`                                                      | Istio control plane revision label; empty means no revision label on managed resources                      |
-| `tls.existingSecret`                                  | string | `""`                                                      | Existing Secret with `ca.crt`, `tls.crt`, and `tls.key` for the ECDS/WASM endpoint. Required for GitOps and static-manifest installs |
-| `tls.generate`                                        | bool   | `true`                                                    | Generate a self-signed serving certificate (365-day CA and leaf) when `tls.existingSecret` is empty. Reuse across upgrades via `lookup` works only with `helm install`/`helm upgrade`; set to `false` for `helm template` and GitOps (Argo CD, Flux) |
+| `tls.existingSecret`                                  | string | `""`                                                      | Existing Secret with `ca.crt`, `tls.crt`, and `tls.key` for the ECDS/WASM endpoint. When set, the chart creates no serving Secret and mounts this one |
+| `tls.generate`                                        | bool   | `true`                                                    | Generate a self-signed serving certificate (365-day CA and leaf) when `tls.existingSecret` is empty. Reuse across upgrades via `lookup` works only with `helm install`/`helm upgrade`; set to `false` for `helm template`, GitOps (Argo CD, Flux), and OLM — the operator then generates and stores it |
 | `tls.sans`                                            | list   | `[]`                                                      | Extra DNS SANs added when the serving certificate is generated. Changing this list does not update a reused Secret; rotate the certificate and restart the operator before using a newly added hostname. |
 | `defaultWasmImage`                                    | string | `""`                                                      | Deprecated and ignored. Use the bundled module or `spec.driver.wasm.url` with `sha256`. |
 | `createNamespace`                                     | bool   | `true`                                                    | Manage the release namespace with Pod Security Standard labels. Requires `--create-namespace` on first install |
@@ -88,19 +88,20 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 
 ### Serving certificate
 
-The ECDS and WASM asset endpoint is served over TLS. The chart has two modes:
+The ECDS and WASM asset endpoint is served over TLS. There are three modes:
 
 - **`helm install` / `helm upgrade` (default, `tls.generate=true`):** Helm generates a self-signed CA and leaf certificate, both valid for **365 days**, into `<release>-serving-cert`, and reuses that Secret on later upgrades via `lookup`. Reuse — and therefore a stable CA — is a `helm install`/`helm upgrade` behavior only.
-- **`tls.existingSecret` / `tls.generate=false`:** the chart creates no certificate; the named Secret (keys `ca.crt`, `tls.crt`, `tls.key`) must already exist in the release namespace.
+- **`tls.existingSecret`:** the chart creates no certificate and mounts the named Secret (keys `ca.crt`, `tls.crt`, `tls.key`), which must already exist in the release namespace.
+- **`tls.generate=false` without `tls.existingSecret` (OLM, static manifests):** the chart mounts no files and leaves the Secret volume optional. The operator generates a CA and leaf on first start, stores them in `<release>-serving-cert` (override with `--xds-cert-secret`), and reuses them across restarts and replicas. It renews them at startup when they are within 30 days of expiry.
 
 #### GitOps (Argo CD, Flux) and static renders
 
 `lookup` returns nothing under `helm template`, `--dry-run`, and the server-side renders performed by Argo CD and Flux. With `tls.generate=true` such a pipeline takes the generate branch and **mints a fresh CA on every sync**. The Gateway trust bundle is inlined into the EnvoyFilter and only updates when the CA hash changes, so proxies end up trusting the old CA while the operator serves the new leaf: every ECDS stream fails TLS and, with the fail-closed bootstrap, Gateways return 503s.
 
-GitOps and static-manifest installs must instead:
+GitOps, static-manifest, and OLM installs must instead:
 
-1. Set `tls.generate=false` (and `tls.existingSecret` to the Secret's name).
-2. Provide the Secret out-of-band — created manually, by your platform tooling, or by a certificate manager such as cert-manager (a `Certificate` + `Issuer`, not a chart-managed resource; the chart adds no cert-manager dependency).
+1. Set `tls.generate=false`.
+2. Either let the operator generate and store the certificate (no further action), or set `tls.existingSecret` and provide the Secret out-of-band — created manually, by your platform tooling, or by a certificate manager such as cert-manager (a `Certificate` + `Issuer`, not a chart-managed resource; the chart adds no cert-manager dependency).
 
 #### Rotation
 

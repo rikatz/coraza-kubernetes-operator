@@ -139,7 +139,7 @@ def override_container_image(deployment: dict, image: str):
         container["image"] = image
 
 
-def build_csv(template_path: str, deployment: dict, cluster_role: dict,
+def build_csv(template_path: str, deployment: dict, cluster_role: dict, role: dict | None,
               sa_name: str, version: str, image: str,
               replaces: str, channels: str, default_channel: str,
               package_name: str, min_kube_version: str,
@@ -168,6 +168,12 @@ def build_csv(template_path: str, deployment: dict, cluster_role: dict,
     csv["spec"]["install"]["spec"]["clusterPermissions"] = [
         {"serviceAccountName": sa_name, "rules": rules},
     ]
+    if role is not None:
+        # OLM applies namespace-scoped permissions from the CSV, not from a
+        # separate Role manifest, so carry the chart Role rules over verbatim.
+        csv["spec"]["install"]["spec"]["permissions"] = [
+            {"serviceAccountName": sa_name, "rules": copy.deepcopy(role["rules"])},
+        ]
 
     return csv
 
@@ -331,6 +337,7 @@ def main():
 
     deployment = find_by_kind(docs, "Deployment")
     cluster_role = find_by_kind(docs, "ClusterRole")
+    role = find_by_kind(docs, "Role")
     service_account = find_by_kind(docs, "ServiceAccount")
 
     if not deployment:
@@ -354,6 +361,7 @@ def main():
         template_path=template_path,
         deployment=deployment,
         cluster_role=cluster_role,
+        role=role,
         sa_name=sa_name,
         version=version,
         image=args.image,
