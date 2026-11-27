@@ -23,6 +23,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -52,8 +53,9 @@ import (
 // validation on the RuleSet remains authoritative for file-backed rules.
 type RuleSourceReconciler struct {
 	client.Client
-	Recorder events.EventRecorder
-	Metrics  *CorazaMetrics
+	APIReader client.Reader
+	Recorder  events.EventRecorder
+	Metrics   *CorazaMetrics
 }
 
 // SetupWithManager sets up the RuleSource controller.
@@ -78,7 +80,8 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	log := logf.FromContext(ctx)
 
 	var rs wafv1alpha1.RuleSource
-	if err := r.Get(ctx, req.NamespacedName, &rs); err != nil {
+	var cached wafv1alpha1.RuleSource
+	if err := r.Get(ctx, req.NamespacedName, &cached); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.Metrics.ForgetRuleSource(req.Namespace, req.Name)
 			var list wafv1alpha1.RuleSourceList
@@ -89,6 +92,16 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		logAPIError(log, req, "RuleSource", err, "Failed to GET", nil)
 		return ctrl.Result{}, err
+	}
+	if err := apiReaderOrClient(r.APIReader, r.Client).Get(ctx, req.NamespacedName, &rs); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+		}
+		logAPIError(log, req, "RuleSource", err, "Failed to GET", nil)
+		return ctrl.Result{}, err
+	}
+	if !sameRuleSourceInputState(&cached, &rs) {
+		return ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
 	}
 
 	defer func() {
@@ -109,6 +122,13 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if isConditionCurrent(rs.Status.Conditions, conditionReady, ruleSourceReadyReasonValidationSkipped, rs.Generation) {
 			return ctrl.Result{}, nil
 		}
+		changed, checkErr := r.ruleSourceChanged(ctx, req.NamespacedName, &rs)
+		if checkErr != nil {
+			return ctrl.Result{}, checkErr
+		}
+		if changed {
+			return ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+		}
 		if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceReadyReasonValidationSkipped, "Per-fragment validation skipped by annotation"); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
@@ -127,6 +147,13 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if isConditionCurrent(rs.Status.Conditions, conditionDegraded, ruleSourceDegradedReasonInvalidRules, rs.Generation) {
 			return ctrl.Result{}, nil
 		}
+		changed, checkErr := r.ruleSourceChanged(ctx, req.NamespacedName, &rs)
+		if checkErr != nil {
+			return ctrl.Result{}, checkErr
+		}
+		if changed {
+			return ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+		}
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceDegradedReasonInvalidRules, err.Error()); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
@@ -139,6 +166,13 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if isConditionCurrent(rs.Status.Conditions, conditionReady, ruleSourceReadyReasonValidated, rs.Generation) {
 		return ctrl.Result{}, nil
 	}
+	changed, err := r.ruleSourceChanged(ctx, req.NamespacedName, &rs)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if changed {
+		return ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+	}
 	if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceReadyReasonValidated, "Rules validated successfully"); patchErr != nil {
 		return ctrl.Result{}, patchErr
 	}
@@ -149,6 +183,27 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		r.Metrics.ObserveRuleSourceValidation(req.Namespace, "valid", validationDuration)
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *RuleSourceReconciler) ruleSourceChanged(
+	ctx context.Context,
+	key types.NamespacedName,
+	expected *wafv1alpha1.RuleSource,
+) (bool, error) {
+	var cached, live wafv1alpha1.RuleSource
+	if err := r.Get(ctx, key, &cached); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	if err := apiReaderOrClient(r.APIReader, r.Client).Get(ctx, key, &live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return !sameRuleSourceInputState(expected, &cached) || !sameRuleSourceInputState(expected, &live), nil
 }
 
 // RuleSource status condition reasons (RuleSourceReconciler and RuleSet gating).

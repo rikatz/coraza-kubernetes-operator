@@ -77,29 +77,34 @@ func SetupControllers(mgr ctrl.Manager, deps Deps) error {
 	if deps.XDS != nil {
 		xdsLimits = deps.XDS.Limits
 	}
+	inputCache := newRuleSetInputCache()
 
 	if err := (&RuleSetReconciler{
 		Client:     mgr.GetClient(),
+		APIReader:  mgr.GetAPIReader(),
 		Scheme:     mgr.GetScheme(),
 		Recorder:   mgr.GetEventRecorder("ruleset-controller"),
 		Metrics:    corazaMetrics,
 		RulePolicy: deps.RulePolicy,
 		Limits:     xdsLimits,
 		MaxRules:   deps.MaxRules,
+		inputCache: inputCache,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller RuleSet: %w", err)
 	}
 
 	if err := (&RuleSourceReconciler{
-		Client:   mgr.GetClient(),
-		Recorder: mgr.GetEventRecorder("rulesource-controller"),
-		Metrics:  corazaMetrics,
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Recorder:  mgr.GetEventRecorder("rulesource-controller"),
+		Metrics:   corazaMetrics,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller RuleSource: %w", err)
 	}
 
 	if err := (&EngineReconciler{
 		Client:            mgr.GetClient(),
+		APIReader:         mgr.GetAPIReader(),
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorder("engine-controller"),
 		Metrics:           corazaMetrics,
@@ -108,20 +113,22 @@ func SetupControllers(mgr ctrl.Manager, deps Deps) error {
 		assetBaseURL:      deps.AssetBaseURL,
 		operatorNamespace: deps.OperatorNamespace,
 		Limits:            xdsLimits,
+		inputCache:        inputCache,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller Engine: %w", err)
 	}
 
 	if deps.XDS != nil {
 		if err := (&PublicationReconciler{
-			Client:    mgr.GetClient(),
-			APIReader: mgr.GetAPIReader(),
-			Scheme:    mgr.GetScheme(),
-			Store:     deps.XDS.Store,
-			Authz:     deps.XDS.Authz,
-			Readiness: deps.XDS.Readiness,
-			Metrics:   deps.XDS.Metrics,
-			Limits:    deps.XDS.Limits,
+			Client:     mgr.GetClient(),
+			APIReader:  mgr.GetAPIReader(),
+			Scheme:     mgr.GetScheme(),
+			Store:      deps.XDS.Store,
+			Authz:      deps.XDS.Authz,
+			Readiness:  deps.XDS.Readiness,
+			Metrics:    deps.XDS.Metrics,
+			Limits:     deps.XDS.Limits,
+			inputCache: inputCache,
 		}).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("unable to create controller Publication: %w", err)
 		}

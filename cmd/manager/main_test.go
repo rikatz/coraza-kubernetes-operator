@@ -62,18 +62,21 @@ func TestBuildCacheOptionsScopesPodsToGatewayDataPlane(t *testing.T) {
 
 // TestBuildCacheOptionsTrimsRuleObjects checks that the RuleSource and RuleData
 // informers drop the last-applied annotation and managed fields, and keep the
-// spec, status, labels and other annotations the controllers read.
+// identity, status, labels and annotations the controllers read while dropping
+// only their content payloads.
 func TestBuildCacheOptionsTrimsRuleObjects(t *testing.T) {
 	opts := buildCacheOptions("operators")
 	condition := metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Validated"}
 	for _, object := range []client.Object{
 		&wafv1alpha1.RuleSource{
-			Spec:   wafv1alpha1.RuleSourceSpec{Rules: "SecRuleEngine On"},
-			Status: wafv1alpha1.RuleSourceStatus{Conditions: []metav1.Condition{condition}},
+			ObjectMeta: metav1.ObjectMeta{UID: "source-uid", Generation: 7},
+			Spec:       wafv1alpha1.RuleSourceSpec{Rules: "SecRuleEngine On"},
+			Status:     wafv1alpha1.RuleSourceStatus{Conditions: []metav1.Condition{condition}},
 		},
 		&wafv1alpha1.RuleData{
-			Spec:   wafv1alpha1.RuleDataSpec{Files: map[string]string{"bad.data": "attack"}},
-			Status: wafv1alpha1.RuleDataStatus{Conditions: []metav1.Condition{condition}},
+			ObjectMeta: metav1.ObjectMeta{UID: "data-uid", Generation: 9},
+			Spec:       wafv1alpha1.RuleDataSpec{Files: map[string]string{"bad.data": "attack"}},
+			Status:     wafv1alpha1.RuleDataStatus{Conditions: []metav1.Condition{condition}},
 		},
 	} {
 		t.Run(fmt.Sprintf("%T", object), func(t *testing.T) {
@@ -94,10 +97,18 @@ func TestBuildCacheOptionsTrimsRuleObjects(t *testing.T) {
 			want := object.DeepCopyObject().(client.Object)
 			want.SetAnnotations(map[string]string{wafv1alpha1.AnnotationSkipValidation: "false"})
 			want.SetManagedFields(nil)
+			switch expected := want.(type) {
+			case *wafv1alpha1.RuleSource:
+				expected.Spec.Rules = ""
+			case *wafv1alpha1.RuleData:
+				expected.Spec.Files = nil
+			}
 
 			got, err := transform(object)
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
+			assert.Equal(t, object.GetUID(), got.(client.Object).GetUID())
+			assert.Equal(t, object.GetGeneration(), got.(client.Object).GetGeneration())
 		})
 	}
 }

@@ -99,13 +99,18 @@ func TestEngineReconciler_NoOpUsesCachedRenderWithoutAssembly(t *testing.T) {
 		stripRuleSourceSpec: true,
 		stripRuleDataSpec:   true,
 	}
+	apiCounts := &apiReaderOperationCounts{}
 	fixture.reconciler.Client = contentless
+	fixture.reconciler.APIReader = &countedAPIReader{Reader: k8sClient, counts: apiCounts}
 
 	result, err := fixture.reconciler.Reconcile(fixture.ctx, req)
 	require.NoError(t, err)
 	require.Zero(t, result.RequeueAfter)
 	require.Equal(t, 2, contentless.sourceGets, "the no-op reads current inputs and performs the final race check")
 	require.Equal(t, 2, contentless.dataGets, "the no-op reads current inputs and performs the final race check")
+	apiSourceGets, apiDataGets := apiCounts.inputGets()
+	require.Zero(t, apiSourceGets, "a no-op must not fetch RuleSource payloads from the API")
+	require.Zero(t, apiDataGets, "a no-op must not fetch RuleData payloads from the API")
 
 	var after wafv1alpha1.Engine
 	require.NoError(t, k8sClient.Get(fixture.ctx, req.NamespacedName, &after))
@@ -263,10 +268,11 @@ func TestEngineReconciler_RecreatedEngineStartsWithItsOwnUID(t *testing.T) {
 		stripRuleDataSpec:   true,
 	}
 	fixture.reconciler.Client = contentless
-	_, err = fixture.reconciler.Reconcile(fixture.ctx, request)
-	require.Error(t, err, "a recreated Engine must not inherit the prior UID's contentless cache entry")
-	require.Equal(t, 1, contentless.sourceGets, "a cache miss must fall straight through to one full-content read")
-	require.Equal(t, 1, contentless.dataGets)
+	result, err = fixture.reconciler.Reconcile(fixture.ctx, request)
+	require.NoError(t, err, "a recreated Engine must reconstruct content under its own UID")
+	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, 2, contentless.sourceGets, "the cache identity is read and rechecked")
+	require.Equal(t, 2, contentless.dataGets)
 
 	fixture.reconciler.Client = k8sClient
 	_, err = fixture.reconciler.Reconcile(fixture.ctx, request)
@@ -279,11 +285,13 @@ func TestEngineReconciler_RecreatedEngineStartsWithItsOwnUID(t *testing.T) {
 
 func TestEngineReconciler_InputMetadataUpdatesKeepAcceptedConfiguration(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		update func(*testing.T, *engineNoopFixture)
+		name             string
+		wantInputAPIRead int64
+		update           func(*testing.T, *engineNoopFixture)
 	}{
 		{
-			name: "validation annotation and status",
+			name:             "validation annotation and status",
+			wantInputAPIRead: 1,
 			update: func(t *testing.T, fixture *engineNoopFixture) {
 				t.Helper()
 				var source wafv1alpha1.RuleSource
@@ -298,7 +306,8 @@ func TestEngineReconciler_InputMetadataUpdatesKeepAcceptedConfiguration(t *testi
 			},
 		},
 		{
-			name: "status-only update",
+			name:             "status-only update",
+			wantInputAPIRead: 1,
 			update: func(t *testing.T, fixture *engineNoopFixture) {
 				t.Helper()
 				var source wafv1alpha1.RuleSource
@@ -364,11 +373,16 @@ func TestEngineReconciler_InputMetadataUpdatesKeepAcceptedConfiguration(t *testi
 				stripRuleDataSpec:   true,
 			}
 			fixture.reconciler.Client = counted
+			apiCounts := &apiReaderOperationCounts{}
+			fixture.reconciler.APIReader = &countedAPIReader{Reader: k8sClient, counts: apiCounts}
 			result, err := fixture.reconciler.Reconcile(fixture.ctx, req)
 			require.NoError(t, err)
 			require.Zero(t, result.RequeueAfter)
 			require.Equal(t, 2, counted.sourceGets, "metadata-only changes need one input read and the final race check")
 			require.Equal(t, 2, counted.dataGets, "metadata-only changes need one input read and the final race check")
+			apiSourceGets, apiDataGets := apiCounts.inputGets()
+			require.Equal(t, test.wantInputAPIRead, apiSourceGets, "unexpected direct RuleSource reads")
+			require.Equal(t, test.wantInputAPIRead, apiDataGets, "unexpected direct RuleData reads")
 
 			var after wafv1alpha1.Engine
 			require.NoError(t, k8sClient.Get(fixture.ctx, req.NamespacedName, &after))
@@ -500,6 +514,7 @@ func TestEngineReconciler_InputReadErrorKeepsAcceptedConfiguration(t *testing.T)
 
 func TestEngineReconciler_CachedAndLiveInputSkewRequeuesBeforeAcceptance(t *testing.T) {
 	fixture := newEngineNoopFixture(t, false)
+	fixture.reconciler.inputCache = newRuleSetInputCache()
 	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
 
 	var staleSource wafv1alpha1.RuleSource
@@ -530,7 +545,7 @@ func TestEngineReconciler_CachedAndLiveInputSkewRequeuesBeforeAcceptance(t *test
 	result, err := fixture.reconciler.Reconcile(fixture.ctx, req)
 	require.NoError(t, err)
 	require.Equal(t, 100*time.Millisecond, result.RequeueAfter)
-	require.Equal(t, 2, skewed.sourceGets, "the final identity check must reject inputs read from a newer object")
+	require.Equal(t, 1, skewed.sourceGets, "the cache identity must reject a newer live object before rendering")
 
 	var after wafv1alpha1.Engine
 	require.NoError(t, k8sClient.Get(fixture.ctx, req.NamespacedName, &after))
@@ -565,14 +580,21 @@ func TestEngineReconciler_FailurePolicyChangeCannotReuseContentlessRenderEntry(t
 		stripRuleDataSpec:   true,
 	}
 	fixture.reconciler.Client = contentless
-	_, err := fixture.reconciler.Reconcile(fixture.ctx, req)
-	require.Error(t, err, "a new render key must load and verify content before acceptance")
-	require.Equal(t, 1, contentless.sourceGets, "a render-cache key miss reads each input once")
-	require.Equal(t, 1, contentless.dataGets)
+	apiCounts := &apiReaderOperationCounts{}
+	fixture.reconciler.APIReader = &countedAPIReader{Reader: k8sClient, counts: apiCounts}
+	result, err := fixture.reconciler.Reconcile(fixture.ctx, req)
+	require.NoError(t, err, "a render-cache key miss must load full inputs from the direct API reader")
+	require.Equal(t, bootstrapConvergeRetryAfter, result.RequeueAfter)
+	require.Equal(t, 2, contentless.sourceGets, "the cache identity is read and rechecked")
+	require.Equal(t, 2, contentless.dataGets)
+	apiSourceGets, apiDataGets := apiCounts.inputGets()
+	require.EqualValues(t, 1, apiSourceGets)
+	require.EqualValues(t, 1, apiDataGets)
 
-	var afterFailure wafv1alpha1.Engine
-	require.NoError(t, k8sClient.Get(fixture.ctx, req.NamespacedName, &afterFailure))
-	require.Equal(t, before.Status.AcceptedConfiguration, afterFailure.Status.AcceptedConfiguration)
+	var afterChange wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(fixture.ctx, req.NamespacedName, &afterChange))
+	require.NotNil(t, afterChange.Status.AcceptedConfiguration)
+	require.Equal(t, wafv1alpha1.FailurePolicyAllow, afterChange.Status.AcceptedConfiguration.FailurePolicy)
 
 	fixture.reconciler.Client = k8sClient
 	_, err = fixture.reconciler.Reconcile(fixture.ctx, req)
@@ -665,21 +687,22 @@ func TestEngineReconciler_SameContentInputUIDOrGenerationDoesNotUseContentlessFa
 				stripRuleDataSpec:   test.stripRuleDataSpec,
 			}
 			fixture.reconciler.Client = contentless
+			apiCounts := &apiReaderOperationCounts{}
+			fixture.reconciler.APIReader = &countedAPIReader{Reader: k8sClient, counts: apiCounts}
 			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
 			result, err := fixture.reconciler.Reconcile(fixture.ctx, req)
-			require.Equal(t, 1, contentless.sourceGets, "an identity miss must use the already-read input")
-			require.Equal(t, 1, contentless.dataGets, "an identity miss must use the already-read input")
-			if test.emptyRulesPolicy == wafv1alpha1.EmptyRulesPolicyAllow {
-				require.NoError(t, err)
-				require.Equal(t, ruleSetAcceptanceRetryAfter, result.RequeueAfter)
-			} else {
-				require.Error(t, err, "changed input identity must not reuse the old contentless cache entry")
-			}
+			require.NoError(t, err, "an identity miss must fetch full content from the direct API reader")
+			require.Zero(t, result.RequeueAfter)
+			require.Equal(t, 2, contentless.sourceGets, "the cache identity is read and rechecked")
+			require.Equal(t, 2, contentless.dataGets)
+			apiSourceGets, apiDataGets := apiCounts.inputGets()
+			require.Equal(t, int64(len(fixture.ruleSet.Spec.Sources)), apiSourceGets)
+			require.Equal(t, int64(len(fixture.ruleSet.Spec.Data)), apiDataGets)
 
-			var afterFailure wafv1alpha1.Engine
-			require.NoError(t, k8sClient.Get(fixture.ctx, req.NamespacedName, &afterFailure))
-			require.Equal(t, before.Status.AcceptedConfiguration, afterFailure.Status.AcceptedConfiguration,
-				"unverified new input must not replace the last accepted configuration")
+			var afterChange wafv1alpha1.Engine
+			require.NoError(t, k8sClient.Get(fixture.ctx, req.NamespacedName, &afterChange))
+			require.Equal(t, before.Status.AcceptedConfiguration, afterChange.Status.AcceptedConfiguration,
+				"identical content with a new input identity must retain its accepted record")
 
 			fixture.reconciler.Client = k8sClient
 			result, err = fixture.reconciler.Reconcile(fixture.ctx, req)

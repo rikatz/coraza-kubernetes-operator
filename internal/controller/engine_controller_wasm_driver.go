@@ -88,8 +88,9 @@ type engineRenderCacheKey struct {
 }
 
 type engineRenderCacheEntry struct {
-	key              engineRenderCacheKey
-	inputFingerprint string
+	key                   engineRenderCacheKey
+	inputFingerprint      string
+	inputStateFingerprint string
 	// contentLimits comes from content matching key.contentHash.
 	contentLimits contentLimitSummary
 	artifact      render.Artifact
@@ -127,6 +128,7 @@ func (c *engineRenderCache) rememberInputFingerprint(
 	engineKey types.NamespacedName,
 	key engineRenderCacheKey,
 	inputFingerprint string,
+	inputStateFingerprint string,
 	limits contentLimitSummary,
 ) {
 	c.mu.Lock()
@@ -136,6 +138,7 @@ func (c *engineRenderCache) rememberInputFingerprint(
 		return
 	}
 	entry.inputFingerprint = inputFingerprint
+	entry.inputStateFingerprint = inputStateFingerprint
 	entry.contentLimits = limits
 	c.entries[engineKey] = entry
 }
@@ -242,7 +245,6 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		return result, err
 	}
 	ruleSet := &accepted.ruleSet
-	inputs := accepted.inputs
 	content := accepted.content
 	contentHash := accepted.contentHash
 
@@ -262,7 +264,12 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		return ctrl.Result{}, err
 	}
 
-	changed, err := r.engineInputsChanged(ctx, engine, ruleSet, inputs)
+	var changed bool
+	if accepted.hasCachedRender {
+		changed, err = r.engineInputsChanged(ctx, engine, ruleSet, accepted.inputView)
+	} else {
+		changed, err = r.engineInputsChangedLive(ctx, engine, ruleSet, accepted.inputView)
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -276,6 +283,7 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		engineKey,
 		engineRenderCacheKeyFor(input),
 		accepted.inputFingerprint,
+		accepted.inputStateFingerprint,
 		accepted.contentLimits,
 	)
 
@@ -333,12 +341,13 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 // acceptedRuleSet has verified the RuleSet's accepted content for this Engine.
 // On the fast path, content is zero; inputs remain local for the final race check.
 type acceptedRuleSet struct {
-	ruleSet          wafv1alpha1.RuleSet
-	inputs           assemble.Inputs
-	content          assemble.Content
-	contentHash      string
-	inputFingerprint string
-	contentLimits    contentLimitSummary
+	ruleSet               wafv1alpha1.RuleSet
+	inputView             ruleSetInputView
+	content               assemble.Content
+	contentHash           string
+	inputFingerprint      string
+	inputStateFingerprint string
+	contentLimits         contentLimitSummary
 	// A fast-path result must carry its verified cache entry through rendering.
 	cachedRender    engineRenderCacheEntry
 	hasCachedRender bool
@@ -377,15 +386,19 @@ func (r *EngineReconciler) acceptedRuleSetContent(
 	cacheKey := engineRenderCacheKeyFor(engineRenderInput(engine, &ruleSet, assemble.Content{}, acceptedContentHash, binary))
 	engineKey := types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}
 	entry, hasRenderEntry := r.renderCache.get(engineKey, cacheKey)
-	inputs, err := loadRuleSetInputs(ctx, r.Client, &ruleSet)
+	cachedView, err := loadRuleSetInputView(ctx, r.Client, &ruleSet, false)
 	if err != nil {
 		return r.ruleSetInputsUnavailable(ctx, log, req, engine, &ruleSet, err)
 	}
-	inputFingerprint := assemble.Fingerprint(inputs)
-	if hasRenderEntry && entry.inputFingerprint != "" && entry.inputFingerprint == inputFingerprint {
+	inputFingerprint := cachedView.inputFingerprint()
+	inputStateFingerprint := cachedView.stateFingerprint()
+	if hasRenderEntry &&
+		entry.inputFingerprint != "" &&
+		entry.inputFingerprint == inputFingerprint &&
+		entry.inputStateFingerprint == inputStateFingerprint {
 		// ResourceVersion can change without changing the input spec. This shortcut
-		// relies on assemble.Fingerprint's precondition that each input's
-		// UID+generation matches the spec represented by cached content.
+		// relies on the informer retaining each input's UID, generation, status,
+		// and validation annotation while its spec payload is pruned.
 		if err := validateContentLimitSummary(entry.contentLimits, r.Limits.WithDefaults()); err != nil {
 			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("RuleSet %s content exceeds delivery limits: %v", ruleSet.Name, err)); patchErr != nil {
 				return nil, ctrl.Result{}, patchErr
@@ -393,15 +406,32 @@ func (r *EngineReconciler) acceptedRuleSetContent(
 			return nil, ctrl.Result{}, err
 		}
 		return &acceptedRuleSet{
-			ruleSet:          ruleSet,
-			inputs:           inputs,
-			contentHash:      acceptedContentHash,
-			inputFingerprint: inputFingerprint,
-			contentLimits:    entry.contentLimits,
-			cachedRender:     entry,
-			hasCachedRender:  true,
+			ruleSet:               ruleSet,
+			inputView:             cachedView,
+			contentHash:           acceptedContentHash,
+			inputFingerprint:      inputFingerprint,
+			inputStateFingerprint: inputStateFingerprint,
+			contentLimits:         entry.contentLimits,
+			cachedRender:          entry,
+			hasCachedRender:       true,
 		}, ctrl.Result{}, nil
 	}
+
+	liveView, _, err := loadConsistentRuleSetInputView(
+		ctx,
+		r.apiReader(),
+		&ruleSet,
+		cachedView,
+		acceptedContentHash,
+		r.inputCache,
+	)
+	if errors.Is(err, errRuleSetInputsChanged) {
+		return nil, ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+	}
+	if err != nil {
+		return r.ruleSetInputsUnavailable(ctx, log, req, engine, &ruleSet, err)
+	}
+	inputs := liveView.inputs
 
 	logDebug(log, req, "Engine", "Assembling accepted RuleSet content")
 	if err := checkInputsSize(inputs); err != nil {
@@ -441,12 +471,13 @@ func (r *EngineReconciler) acceptedRuleSetContent(
 	}
 
 	return &acceptedRuleSet{
-		ruleSet:          ruleSet,
-		inputs:           inputs,
-		content:          content,
-		contentHash:      contentHash,
-		inputFingerprint: inputFingerprint,
-		contentLimits:    contentLimits,
+		ruleSet:               ruleSet,
+		inputView:             liveView,
+		content:               content,
+		contentHash:           contentHash,
+		inputFingerprint:      inputFingerprint,
+		inputStateFingerprint: inputStateFingerprint,
+		contentLimits:         contentLimits,
 	}, ctrl.Result{}, nil
 }
 

@@ -110,6 +110,7 @@ func acceptTestRuleSet(t *testing.T, ctx context.Context, ruleSet *wafv1alpha1.R
 func newAcceptedEngineTestReconciler() *EngineReconciler {
 	return &EngineReconciler{
 		Client:            k8sClient,
+		APIReader:         k8sClient,
 		Scheme:            scheme,
 		Recorder:          utils.NewTestRecorder(),
 		xdsConfig:         testXDSConfig(),
@@ -230,7 +231,7 @@ func TestEngineReconciler_EngineInputsChangedDetectsSourceUpdate(t *testing.T) {
 	engine := utils.NewTestEngine(utils.EngineOptions{Name: "changed-engine", Namespace: ns})
 	require.NoError(t, k8sClient.Create(ctx, engine))
 
-	inputs, err := loadRuleSetInputs(ctx, k8sClient, ruleSet)
+	inputs, err := loadRuleSetInputView(ctx, k8sClient, ruleSet, false)
 	require.NoError(t, err)
 
 	reconciler := newAcceptedEngineTestReconciler()
@@ -349,6 +350,13 @@ func newDeliveryLimitEngineFixture(t *testing.T, ctx context.Context, ns, name s
 	})
 	require.NoError(t, k8sClient.Create(ctx, ruleSet))
 	acceptTestRuleSet(t, ctx, ruleSet, testAcceptDataRuleText)
+	source := &wafv1alpha1.RuleSource{}
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "test-rules"}, source))
+	source.Annotations = map[string]string{wafv1alpha1.AnnotationSkipValidation: "false"}
+	require.NoError(t, k8sClient.Update(ctx, source))
+	_, err := (&RuleSourceReconciler{Client: k8sClient, APIReader: k8sClient, Recorder: utils.NewTestRecorder()}).
+		Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(source)})
+	require.NoError(t, err)
 
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:        name + "-engine",

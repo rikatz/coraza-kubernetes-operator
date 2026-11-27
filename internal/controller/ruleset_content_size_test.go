@@ -770,6 +770,10 @@ func TestPublicationCoalescedReconcileSkipsTheSizeCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorIs(t, checkInputsSize(inputs), errContentTooLarge, "a size check would refuse these inputs")
 
-	publication.remember(request.NamespacedName, assemble.Fingerprint(inputs), accepted.Version, engine.UID)
+	var currentRuleSet wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(ruleSet), &currentRuleSet))
+	view, err := loadRuleSetInputView(ctx, k8sClient, &currentRuleSet, false)
+	require.NoError(t, err)
+	publication.remember(request.NamespacedName, view.inputFingerprint(), accepted.Version, engine.UID)
 	require.NoError(t, publication.reconstruct(ctx, request.NamespacedName, engine, accepted))
 }

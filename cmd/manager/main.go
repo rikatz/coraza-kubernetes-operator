@@ -433,10 +433,9 @@ func runtimeMemoryLimit(value string) (int64, bool) {
 
 // stripLastApplied drops managed fields and the kubectl last-applied
 // annotation, which repeats the whole spec of an applied RuleSource or
-// RuleData, before the object is cached: every replica caches these objects in
-// full. The operator reads neither field and writes these kinds only through
-// status patches, so the stored objects keep both. A per-type transform
-// replaces the default one, so it strips managed fields too.
+// RuleData, before the object is cached. These fields remain on the API objects;
+// transforms affect only informer copies. A per-type transform replaces the
+// default one, so it strips managed fields too.
 func stripLastApplied(in any) (any, error) {
 	if obj, err := meta.Accessor(in); err == nil {
 		annotations := obj.GetAnnotations()
@@ -446,17 +445,32 @@ func stripLastApplied(in any) (any, error) {
 	return ctrlcache.TransformStripManagedFields()(in)
 }
 
+// stripRuleInputContent removes tenant-supplied payloads from the typed
+// informers. Controllers that validate or reconstruct content use the direct
+// API reader; identity, status, annotations and watch metadata stay cached.
+func stripRuleInputContent(in any) (any, error) {
+	switch obj := in.(type) {
+	case *wafv1alpha1.RuleSource:
+		obj.Spec.Rules = ""
+	case *wafv1alpha1.RuleData:
+		obj.Spec.Files = nil
+	default:
+		return nil, fmt.Errorf("unexpected rule input cache object %T", in)
+	}
+	return stripLastApplied(in)
+}
+
 // buildCacheOptions returns cache options that scope the NetworkPolicy informer
 // to the operator namespace, and the Pod informer to Gateway data-plane pods
 // (label-selected, with the churny parts of PodStatus stripped). Without this,
 // the controllers would cache every Pod and NetworkPolicy in the cluster.
-// RuleSource and RuleData are cached without their last-applied copy.
+// RuleSource and RuleData keep identity/status/watch metadata but not content.
 func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
 	return ctrlcache.Options{
 		DefaultTransform: ctrlcache.TransformStripManagedFields(),
 		ByObject: map[client.Object]ctrlcache.ByObject{
-			&wafv1alpha1.RuleSource{}: {Transform: stripLastApplied},
-			&wafv1alpha1.RuleData{}:   {Transform: stripLastApplied},
+			&wafv1alpha1.RuleSource{}: {Transform: stripRuleInputContent},
+			&wafv1alpha1.RuleData{}:   {Transform: stripRuleInputContent},
 			&networkingv1.NetworkPolicy{}: {
 				Namespaces: map[string]ctrlcache.Config{
 					operatorNamespace: {},

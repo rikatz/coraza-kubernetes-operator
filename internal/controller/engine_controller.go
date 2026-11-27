@@ -71,6 +71,7 @@ type EngineReconciler struct {
 	Metrics  *CorazaMetrics
 
 	client.Client
+	APIReader     client.Reader
 	istioRevision string
 	// xdsConfig carries the ECDS endpoint and CA material injected into the
 	// EnvoyFilter.
@@ -80,6 +81,7 @@ type EngineReconciler struct {
 	assetBaseURL      string
 	operatorNamespace string
 	renderCache       engineRenderCache
+	inputCache        *ruleSetInputCache
 	// Limits bounds the configuration an Engine may accept. Acceptance must
 	// reject content the ECDS serving plane could not deliver.
 	Limits xds.Limits

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -168,6 +169,7 @@ func benchmarkEngineReconcileEnvtest(b *testing.B, evictRenderCache, updateMetad
 
 	reconciler := &EngineReconciler{
 		Client:            measuredClient,
+		APIReader:         &countedAPIReader{Reader: k8sClient, counts: &apiReaderOperationCounts{}},
 		Scheme:            scheme,
 		Recorder:          utils.NewTestRecorder(),
 		xdsConfig:         testXDSConfig(),
@@ -175,6 +177,7 @@ func benchmarkEngineReconcileEnvtest(b *testing.B, evictRenderCache, updateMetad
 		operatorNamespace: testNamespace,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: engine.Name, Namespace: engine.Namespace}}
+	apiCounts := reconciler.APIReader.(*countedAPIReader).counts
 
 	waitForEngineInputsCache(b, cacheReader, engine, &storedRuleSet, sources, data, contentHash)
 	result, err := reconciler.Reconcile(ctx, req)
@@ -223,12 +226,14 @@ func benchmarkEngineReconcileEnvtest(b *testing.B, evictRenderCache, updateMetad
 		reconciler.Client = measuredClient
 	}
 	counts.reset()
+	apiCounts.reset()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := range b.N {
 		sourceGetsBefore := counts.ruleSourceGets
 		dataGetsBefore := counts.ruleDataGets
+		apiSourceGetsBefore, apiDataGetsBefore := apiCounts.inputGets()
 		if updateMetadata {
 			b.StopTimer()
 			updateBenchmarkSourceMetadata(b, ctx, cacheReader, namespace, fmt.Sprint(i))
@@ -260,6 +265,13 @@ func benchmarkEngineReconcileEnvtest(b *testing.B, evictRenderCache, updateMetad
 			if got := counts.ruleDataGets - dataGetsBefore; got != wantDataGets {
 				b.Fatalf("metadata-only reconcile performed %d RuleData Gets; want %d (identity and race check)", got, wantDataGets)
 			}
+			apiSourceGets, apiDataGets := apiCounts.inputGets()
+			if got := apiSourceGets - apiSourceGetsBefore; got != 0 {
+				b.Fatalf("metadata-only reconcile performed %d direct RuleSource Gets; want 0", got)
+			}
+			if got := apiDataGets - apiDataGetsBefore; got != 0 {
+				b.Fatalf("metadata-only reconcile performed %d direct RuleData Gets; want 0", got)
+			}
 		}
 		if inputGenerationChange != "" {
 			wantSourceGets := int64(len(sources))
@@ -270,13 +282,101 @@ func benchmarkEngineReconcileEnvtest(b *testing.B, evictRenderCache, updateMetad
 			if got := counts.ruleDataGets - dataGetsBefore; got != wantDataGets {
 				b.Fatalf("input-generation reconcile performed %d RuleData Gets; want %d (one full-input read)", got, wantDataGets)
 			}
+			apiSourceGets, apiDataGets := apiCounts.inputGets()
+			if got := apiSourceGets - apiSourceGetsBefore; got != int64(len(sources)) {
+				b.Fatalf("input-generation reconcile performed %d direct RuleSource Gets; want %d", got, len(sources))
+			}
+			if got := apiDataGets - apiDataGetsBefore; got != int64(len(ruleSet.Spec.Data)) {
+				b.Fatalf("input-generation reconcile performed %d direct RuleData Gets; want %d", got, len(ruleSet.Spec.Data))
+			}
 		}
 	}
 	b.StopTimer()
 
 	counts.report(b, b.N)
+	apiCounts.report(b, b.N)
 	b.ReportMetric(float64(len(content.Rules)), "rule_bytes")
 	b.ReportMetric(float64(len(dataValue)), "data_bytes")
+}
+
+type apiReaderOperationCounts struct {
+	mu                sync.Mutex
+	ruleSourceGets    int64
+	ruleDataGets      int64
+	ruleSetGets       int64
+	engineGets        int64
+	ruleSourceGetTime time.Duration
+	ruleDataGetTime   time.Duration
+}
+
+func (c *apiReaderOperationCounts) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ruleSourceGets = 0
+	c.ruleDataGets = 0
+	c.ruleSetGets = 0
+	c.engineGets = 0
+	c.ruleSourceGetTime = 0
+	c.ruleDataGetTime = 0
+}
+
+func (c *apiReaderOperationCounts) record(obj client.Object, duration time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch obj.(type) {
+	case *wafv1alpha1.RuleSource:
+		c.ruleSourceGets++
+		c.ruleSourceGetTime += duration
+	case *wafv1alpha1.RuleData:
+		c.ruleDataGets++
+		c.ruleDataGetTime += duration
+	case *wafv1alpha1.RuleSet:
+		c.ruleSetGets++
+	case *wafv1alpha1.Engine:
+		c.engineGets++
+	}
+}
+
+func (c *apiReaderOperationCounts) inputGets() (int64, int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ruleSourceGets, c.ruleDataGets
+}
+
+func (c *apiReaderOperationCounts) report(b *testing.B, iterations int) {
+	b.Helper()
+	c.mu.Lock()
+	sources := c.ruleSourceGets
+	data := c.ruleDataGets
+	ruleSets := c.ruleSetGets
+	engines := c.engineGets
+	inputTime := c.ruleSourceGetTime + c.ruleDataGetTime
+	c.mu.Unlock()
+	if iterations == 0 {
+		return
+	}
+	inputGets := sources + data
+	b.ReportMetric(float64(sources)/float64(iterations), "api_rule_source_gets/op")
+	b.ReportMetric(float64(data)/float64(iterations), "api_rule_data_gets/op")
+	b.ReportMetric(float64(ruleSets)/float64(iterations), "api_ruleset_gets/op")
+	b.ReportMetric(float64(engines)/float64(iterations), "api_engine_gets/op")
+	b.ReportMetric(float64(inputGets)/float64(iterations), "api_input_gets/op")
+	b.ReportMetric(float64(inputTime.Nanoseconds())/float64(iterations), "api_input_get_ns/op")
+	if inputGets != 0 {
+		b.ReportMetric(float64(inputTime.Nanoseconds())/float64(inputGets), "api_input_get_ns/get")
+	}
+}
+
+type countedAPIReader struct {
+	client.Reader
+	counts *apiReaderOperationCounts
+}
+
+func (r *countedAPIReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	start := time.Now()
+	err := r.Reader.Get(ctx, key, obj, opts...)
+	r.counts.record(obj, time.Since(start))
+	return err
 }
 
 func updateBenchmarkInputSpec(b *testing.B, ctx context.Context, cacheReader client.Reader, namespace, kind string) {
@@ -460,7 +560,16 @@ func (c *engineBenchmarkClient) Get(ctx context.Context, key client.ObjectKey, o
 	case *wafv1alpha1.RuleData:
 		c.counts.ruleDataGets++
 	}
-	return c.cache.Get(ctx, key, obj, opts...)
+	if err := c.cache.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	switch input := obj.(type) {
+	case *wafv1alpha1.RuleSource:
+		input.Spec.Rules = ""
+	case *wafv1alpha1.RuleData:
+		input.Spec.Files = nil
+	}
+	return nil
 }
 
 func (c *engineBenchmarkClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {

@@ -161,7 +161,7 @@ func createPublicationRuleSource(t *testing.T, ctx context.Context, namespace, n
 	return source
 }
 
-func createPublicationEngine(t *testing.T, ctx context.Context, namespace, name, ruleSetName, gatewayName string) *wafv1alpha1.Engine {
+func createPublicationEngine(t testing.TB, ctx context.Context, namespace, name, ruleSetName, gatewayName string) *wafv1alpha1.Engine {
 	t.Helper()
 	engine := &wafv1alpha1.Engine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
@@ -186,7 +186,7 @@ func createPublicationEngine(t *testing.T, ctx context.Context, namespace, name,
 // acceptedConfigurationFor renders the currently resolvable inputs and returns
 // the accepted record a leader would have written. mutate may adjust the
 // rendering inputs before rendering.
-func acceptedConfigurationFor(t *testing.T, engine *wafv1alpha1.Engine, ruleSet *wafv1alpha1.RuleSet, content assemble.Content, mutate func(*render.EngineInput)) *wafv1alpha1.EngineAcceptedConfiguration {
+func acceptedConfigurationFor(t testing.TB, engine *wafv1alpha1.Engine, ruleSet *wafv1alpha1.RuleSet, content assemble.Content, mutate func(*render.EngineInput)) *wafv1alpha1.EngineAcceptedConfiguration {
 	t.Helper()
 
 	contentHash, err := render.RuleSetContentHash(content)
@@ -228,7 +228,7 @@ func acceptedConfigurationFor(t *testing.T, engine *wafv1alpha1.Engine, ruleSet 
 	}
 }
 
-func writeAcceptedConfiguration(t *testing.T, ctx context.Context, engine *wafv1alpha1.Engine, accepted *wafv1alpha1.EngineAcceptedConfiguration) {
+func writeAcceptedConfiguration(t testing.TB, ctx context.Context, engine *wafv1alpha1.Engine, accepted *wafv1alpha1.EngineAcceptedConfiguration) {
 	t.Helper()
 	engine.Status = &wafv1alpha1.EngineStatus{
 		Conditions: []metav1.Condition{{
@@ -414,11 +414,16 @@ func TestPublicationReconciler_NoOpCoalescesWithoutAssembly(t *testing.T) {
 		stripRuleSourceSpec: true,
 		stripRuleDataSpec:   true,
 	}
+	apiCounts := &apiReaderOperationCounts{}
 	publication.Client = contentless
+	publication.APIReader = &countedAPIReader{Reader: k8sClient, counts: apiCounts}
 	_, err = publication.Reconcile(fixture.ctx, request)
 	require.NoError(t, err)
 	require.Equal(t, 1, contentless.sourceGets)
 	require.Equal(t, 1, contentless.dataGets)
+	apiSourceGets, apiDataGets := apiCounts.inputGets()
+	require.Zero(t, apiSourceGets, "a no-op must not fetch RuleSource payloads from the API")
+	require.Zero(t, apiDataGets, "a no-op must not fetch RuleData payloads from the API")
 
 	state := publication.states[request.NamespacedName]
 	require.NotNil(t, state)
@@ -456,11 +461,16 @@ func TestPublicationReconciler_RuleSourceMetadataChangeKeepsSnapshot(t *testing.
 		stripRuleSourceSpec: true,
 		stripRuleDataSpec:   true,
 	}
+	apiCounts := &apiReaderOperationCounts{}
 	publication.Client = counted
+	publication.APIReader = &countedAPIReader{Reader: k8sClient, counts: apiCounts}
 	_, err = publication.Reconcile(fixture.ctx, request)
 	require.NoError(t, err)
-	require.Equal(t, 1, counted.sourceGets, "metadata-only changes must coalesce without assembling content")
+	require.Equal(t, 1, counted.sourceGets, "metadata-only changes preserve the accepted input identity")
 	require.Equal(t, 1, counted.dataGets)
+	apiSourceGets, apiDataGets := apiCounts.inputGets()
+	require.Zero(t, apiSourceGets)
+	require.Zero(t, apiDataGets)
 
 	state := publication.states[request.NamespacedName]
 	require.NotNil(t, state)
@@ -477,11 +487,15 @@ func TestPublicationReconciler_RuleSourceMetadataChangeKeepsSnapshot(t *testing.
 		stripRuleSourceSpec: true,
 		stripRuleDataSpec:   true,
 	}
+	apiCounts.reset()
 	publication.Client = counted
 	_, err = publication.Reconcile(fixture.ctx, request)
 	require.NoError(t, err)
 	require.Equal(t, 1, counted.sourceGets)
 	require.Equal(t, 1, counted.dataGets)
+	apiSourceGets, apiDataGets = apiCounts.inputGets()
+	require.Zero(t, apiSourceGets)
+	require.Zero(t, apiDataGets)
 	after, found = publication.Store.Get(request.NamespacedName.String())
 	require.True(t, found)
 	require.Equal(t, before.Version, after.Version)
@@ -505,11 +519,16 @@ func TestPublicationReconcilerContentGenerationChangeReadsFullContent(t *testing
 	require.Greater(t, source.Generation, oldGeneration)
 
 	counted := &ruleSetInputTestClient{Client: k8sClient}
+	apiCounts := &apiReaderOperationCounts{}
 	publication.Client = counted
+	publication.APIReader = &countedAPIReader{Reader: k8sClient, counts: apiCounts}
 	_, err = publication.Reconcile(fixture.ctx, request)
 	require.NoError(t, err)
 	require.Equal(t, 1, counted.sourceGets, "an input generation change must use the already-read input")
 	require.Equal(t, 1, counted.dataGets)
+	apiSourceGets, apiDataGets := apiCounts.inputGets()
+	require.EqualValues(t, 1, apiSourceGets)
+	require.EqualValues(t, 1, apiDataGets)
 
 	after, found := publication.Store.Get(request.NamespacedName.String())
 	require.True(t, found)
@@ -533,8 +552,8 @@ func TestPublicationReconciler_RebuildsWhenLocalSnapshotIsMissing(t *testing.T) 
 	publication.Client = counted
 	_, err = publication.Reconcile(fixture.ctx, request)
 	require.NoError(t, err)
-	require.Equal(t, 1, counted.sourceGets, "a missing local snapshot must use one full-input read")
-	require.Equal(t, 1, counted.dataGets)
+	require.Equal(t, 2, counted.sourceGets, "a cold snapshot rebuild reads content and rechecks cached identity")
+	require.Equal(t, 2, counted.dataGets)
 
 	after, found := publication.Store.Get(request.NamespacedName.String())
 	require.True(t, found, "a replica with a missing local snapshot must reconstruct it")
@@ -557,8 +576,8 @@ func TestPublicationReconcilerEachReplicaReconstructsItsOwnSnapshot(t *testing.T
 	second.Client = counted
 	_, err = second.Reconcile(fixture.ctx, request)
 	require.NoError(t, err)
-	require.Equal(t, 1, counted.sourceGets, "a new replica has no local coalescing state")
-	require.Equal(t, 1, counted.dataGets)
+	require.Equal(t, 2, counted.sourceGets, "a new replica reads content and rechecks cached identity")
+	require.Equal(t, 2, counted.dataGets)
 
 	secondSnapshot, found := second.Store.Get(request.NamespacedName.String())
 	require.True(t, found)
@@ -616,20 +635,30 @@ func TestPublicationReconcilerDoesNotCoalesceAcrossInputUIDOrGenerationChanges(t
 			contentless := &ruleSetInputTestClient{Client: k8sClient}
 			test.strip(contentless)
 			publication.Client = contentless
-			_, err = publication.Reconcile(fixture.ctx, request)
-			require.NoError(t, err, "unavailable input content is a retained-snapshot wait state")
-			require.Equal(t, 1, contentless.sourceGets)
-			require.Equal(t, 1, contentless.dataGets)
+			apiCounts := &apiReaderOperationCounts{}
+			publication.APIReader = &countedAPIReader{Reader: k8sClient, counts: apiCounts}
+			result, err := publication.Reconcile(fixture.ctx, request)
+			require.NoError(t, err, "a cache identity miss must load full content from the API reader")
+			require.Zero(t, result.RequeueAfter)
+			require.Equal(t, 2, contentless.sourceGets)
+			require.Equal(t, 2, contentless.dataGets)
+			apiSourceGets, apiDataGets := apiCounts.inputGets()
+			require.EqualValues(t, 1, apiSourceGets)
+			require.EqualValues(t, 1, apiDataGets)
 			state := publication.states[request.NamespacedName]
 			require.NotNil(t, state)
-			require.False(t, state.mismatchSince.IsZero(), "changed input identity must not take the no-op path")
+			require.True(t, state.mismatchSince.IsZero(), "same accepted content must remain publishable")
 			after, found := publication.Store.Get(request.NamespacedName.String())
 			require.True(t, found)
 			require.Equal(t, before.Version, after.Version, "an unverified input must not replace the accepted snapshot")
 
+			apiCounts.reset()
 			publication.Client = k8sClient
 			_, err = publication.Reconcile(fixture.ctx, request)
 			require.NoError(t, err)
+			apiSourceGets, apiDataGets = apiCounts.inputGets()
+			require.Zero(t, apiSourceGets)
+			require.Zero(t, apiDataGets)
 			state = publication.states[request.NamespacedName]
 			require.True(t, state.mismatchSince.IsZero(), "publication must recover once full content is available")
 			after, found = publication.Store.Get(request.NamespacedName.String())
@@ -690,8 +719,9 @@ func TestPublicationReconcilerMissingInputRetainsPublishedSnapshot(t *testing.T)
 	require.NoError(t, k8sClient.Delete(fixture.ctx, fixture.source))
 	counted := &ruleSetInputTestClient{Client: k8sClient}
 	publication.Client = counted
-	_, err = publication.Reconcile(fixture.ctx, request)
+	result, err := publication.Reconcile(fixture.ctx, request)
 	require.NoError(t, err, "a missing input is a retained-snapshot wait state, not a transient API error")
+	require.Equal(t, ctrl.Result{}, result, "a stable NotFound waits for watch events rather than polling")
 	require.Equal(t, 1, counted.sourceGets)
 	require.Zero(t, counted.dataGets, "RuleData reads must stop after the missing RuleSource")
 

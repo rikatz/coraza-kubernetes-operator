@@ -69,16 +69,18 @@ const ruleSourceValidationRequeue = 3 * time.Second
 // RuleSetReconciler reconciles a RuleSet object
 type RuleSetReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder events.EventRecorder
-	Metrics  *CorazaMetrics
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Recorder  events.EventRecorder
+	Metrics   *CorazaMetrics
 	// RulePolicy is the cluster rule policy applied to content not accepted yet.
 	RulePolicy validation.RulePolicy
 	// Limits are the delivery limits Engines enforce. The RuleSet refuses
 	// content past them, so an Engine never has to withdraw what it serves.
 	Limits xds.Limits
 	// MaxRules bounds the rules of one RuleSet; zero means DefaultMaxRules.
-	MaxRules int
+	MaxRules   int
+	inputCache *ruleSetInputCache
 
 	// results holds each RuleSet's contentResults.
 	resultsMu sync.Mutex
@@ -147,6 +149,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.Get(ctx, req.NamespacedName, &ruleset); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.forgetContentResults(req.NamespacedName)
+			r.inputCache.invalidate(req.NamespacedName)
 			r.Metrics.ForgetRuleSet(req.Namespace, req.Name)
 			r.reconcileRuleDataMetrics(ctx, req.Namespace)
 			return ctrl.Result{}, nil
@@ -236,6 +239,14 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				return ctrl.Result{}, nil
 			}
 		}
+		changed, err := r.ruleSetInputsChanged(ctx, &ruleset, prepared.inputView)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if changed {
+			r.inputCache.invalidate(req.NamespacedName)
+			return ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -263,6 +274,15 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	changed, err := r.ruleSetInputsChanged(ctx, &ruleset, prepared.inputView)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if changed {
+		r.inputCache.invalidate(req.NamespacedName)
+		return ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+	}
+
 	logInfo(log, req, "RuleSet", "Accepting rules")
 	result, err = r.acceptRules(ctx, log, req, &ruleset, content, inputs, unsupportedMsg)
 	if err != nil {
@@ -278,6 +298,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // preparedRuleSet is the assembled content and its validation timing.
 type preparedRuleSet struct {
 	inputs         assemble.Inputs
+	inputView      ruleSetInputView
 	content        assemble.Content
 	contentHash    string
 	assembleDur    time.Duration
@@ -301,19 +322,32 @@ func (r *RuleSetReconciler) prepareRuleSetInputs(ctx context.Context, log logr.L
 		return nil, ctrl.Result{}, nil
 	}
 
-	logDebug(log, req, "RuleSet", "Loading RuleData objects")
-	dataInputs, done, err := r.loadData(ctx, log, req, ruleset)
-	if done || err != nil {
-		return nil, ctrl.Result{}, err
-	}
-
 	logDebug(log, req, "RuleSet", "Loading RuleSource objects")
-	sourceInputs, done, requeueAfter, err := r.loadSources(ctx, log, req, ruleset)
+	sourceInputs, sourceStates, done, requeueAfter, err := r.loadSources(ctx, log, req, ruleset)
+	if errors.Is(err, errRuleSetInputsChanged) {
+		r.inputCache.invalidate(req.NamespacedName)
+		return nil, ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+	}
 	if err != nil {
 		return nil, ctrl.Result{}, err
 	}
 	if done {
+		r.inputCache.invalidate(req.NamespacedName)
 		return nil, ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
+
+	logDebug(log, req, "RuleSet", "Loading RuleData objects")
+	dataInputs, dataStates, done, err := r.loadData(ctx, log, req, ruleset)
+	if errors.Is(err, errRuleSetInputsChanged) {
+		r.inputCache.invalidate(req.NamespacedName)
+		return nil, ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+	}
+	if done {
+		r.inputCache.invalidate(req.NamespacedName)
+		return nil, ctrl.Result{}, err
+	}
+	if err != nil {
+		return nil, ctrl.Result{}, err
 	}
 
 	inputs := assemble.Inputs{
@@ -323,6 +357,11 @@ func (r *RuleSetReconciler) prepareRuleSetInputs(ctx context.Context, log logr.L
 		EmptyRulesPolicy: assemble.EmptyRulesPolicy(ruleset.Spec.EmptyRulesPolicy),
 		Sources:          sourceInputs,
 		Data:             dataInputs,
+	}
+	inputView := ruleSetInputView{
+		inputs:  inputs,
+		sources: sourceStates,
+		data:    dataStates,
 	}
 	// Content past what one configuration can carry is refused before it is
 	// assembled.
@@ -358,6 +397,7 @@ func (r *RuleSetReconciler) prepareRuleSetInputs(ctx context.Context, log logr.L
 
 	return &preparedRuleSet{
 		inputs:         inputs,
+		inputView:      inputView,
 		content:        content,
 		contentHash:    contentHash,
 		assembleDur:    assembleDur,
@@ -515,14 +555,18 @@ func ruleSourceWatchPredicate() predicate.Predicate {
 }
 
 // ruleDataWatchPredicate enqueues referencing RuleSets (or refreshes namespace
-// ruledata totals) when RuleData is created, updated, or deleted.
+// ruledata totals) when RuleData spec or status changes, or it is created/deleted.
 func ruleDataWatchPredicate() predicate.Predicate {
 	return predicate.Or(
 		predicate.GenerationChangedPredicate{},
 		predicate.Funcs{
-			CreateFunc:  func(event.CreateEvent) bool { return true },
-			DeleteFunc:  func(event.DeleteEvent) bool { return true },
-			UpdateFunc:  func(event.UpdateEvent) bool { return false },
+			CreateFunc: func(event.CreateEvent) bool { return true },
+			DeleteFunc: func(event.DeleteEvent) bool { return true },
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				oldData, ok1 := e.ObjectOld.(*wafv1alpha1.RuleData)
+				newData, ok2 := e.ObjectNew.(*wafv1alpha1.RuleData)
+				return ok1 && ok2 && !apiequality.Semantic.DeepEqual(oldData.Status, newData.Status)
+			},
 			GenericFunc: func(event.GenericEvent) bool { return false },
 		},
 	)

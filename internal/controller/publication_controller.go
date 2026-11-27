@@ -59,11 +59,12 @@ type PublicationReconciler struct {
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
 
-	Store     *xds.SnapshotStore
-	Authz     *xds.AuthzIndex
-	Readiness *xds.PublicationReadiness
-	Metrics   *xds.Metrics
-	Limits    xds.Limits
+	Store      *xds.SnapshotStore
+	Authz      *xds.AuthzIndex
+	Readiness  *xds.PublicationReadiness
+	Metrics    *xds.Metrics
+	Limits     xds.Limits
+	inputCache *ruleSetInputCache
 
 	mu     sync.Mutex
 	states map[types.NamespacedName]*publicationState
@@ -177,6 +178,9 @@ func (r *PublicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		r.Readiness.RecordFailure(engine.Namespace, engine.Name, err)
 		log.V(1).Info("Publication: configuration does not match the accepted record", "reason", err.Error())
 		r.recordMismatch(req.NamespacedName)
+		if errors.Is(err, errRuleSetInputsChanged) && refreshErr == nil {
+			return ctrl.Result{RequeueAfter: ruleInputConsistencyRetry}, nil
+		}
 		return ctrl.Result{}, refreshErr
 	}
 
@@ -199,14 +203,45 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 		return fmt.Errorf("RuleSet UID does not match the accepted record")
 	}
 
-	inputs, err := loadRuleSetInputs(ctx, r.Client, &ruleset)
+	cachedView, err := loadRuleSetInputView(ctx, r.Client, &ruleset, false)
 	if err != nil {
 		return publicationInputReadError(err)
 	}
-	fingerprint := assemble.Fingerprint(inputs)
-	if state, ok := r.coalescedState(key, accepted.Version, engine.UID); ok && state.fingerprint == fingerprint {
+	fingerprint := cachedView.inputFingerprint()
+	if state, ok := r.coalescedState(key, accepted.Version, engine.UID); ok &&
+		state.fingerprint == fingerprint {
 		return nil
 	}
+	apiReader := apiReaderOrClient(r.APIReader, r.Client)
+	var liveRuleSet wafv1alpha1.RuleSet
+	if err := apiReader.Get(
+		ctx,
+		types.NamespacedName{Namespace: engine.Namespace, Name: engine.Spec.RuleSet.Name},
+		&liveRuleSet,
+	); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("referenced RuleSet is not available")
+		}
+		return &transientError{err: err}
+	}
+	if !sameRuleSetAcceptanceView(&ruleset, &liveRuleSet) {
+		return fmt.Errorf("%w: RuleSet cache and API views differ", errRuleSetInputsChanged)
+	}
+	liveView, _, err := loadConsistentRuleSetInputView(
+		ctx,
+		apiReader,
+		&liveRuleSet,
+		cachedView,
+		accepted.RuleSetContentHash,
+		r.inputCache,
+	)
+	if errors.Is(err, errRuleSetInputsChanged) {
+		return err
+	}
+	if err != nil {
+		return publicationInputReadError(err)
+	}
+	inputs := liveView.inputs
 	if err := checkInputsSize(inputs); err != nil {
 		return err
 	}
@@ -262,6 +297,9 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 	if err := validateRenderedPayload(artifact, limits); err != nil {
 		return err
 	}
+	if err := r.publicationInputsChanged(ctx, key, engine, accepted, &ruleset, liveView); err != nil {
+		return err
+	}
 
 	if err := r.Store.Replace(&xds.Snapshot{
 		ResourceName: artifact.ResourceName,
@@ -282,6 +320,54 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 	)
 	r.Metrics.SetSnapshotVersion(engine.Namespace, engine.Name)
 	r.remember(key, fingerprint, accepted.Version, engine.UID)
+	return nil
+}
+
+func (r *PublicationReconciler) publicationInputsChanged(
+	ctx context.Context,
+	key types.NamespacedName,
+	engine *wafv1alpha1.Engine,
+	accepted *wafv1alpha1.EngineAcceptedConfiguration,
+	ruleset *wafv1alpha1.RuleSet,
+	inputs ruleSetInputView,
+) error {
+	reader := apiReaderOrClient(r.APIReader, r.Client)
+	var currentEngine wafv1alpha1.Engine
+	if err := reader.Get(ctx, key, &currentEngine); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("engine is not available")
+		}
+		return &transientError{err: err}
+	}
+	if currentEngine.UID != engine.UID || currentEngine.Generation != engine.Generation ||
+		!apiequality.Semantic.DeepEqual(acceptedConfiguration(&currentEngine), accepted) {
+		return fmt.Errorf("%w: Engine acceptance changed during reconstruction", errRuleSetInputsChanged)
+	}
+
+	var cachedRuleSet, liveRuleSet wafv1alpha1.RuleSet
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ruleset.Namespace, Name: ruleset.Name}, &cachedRuleSet); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("referenced RuleSet is not available")
+		}
+		return &transientError{err: err}
+	}
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: ruleset.Namespace, Name: ruleset.Name}, &liveRuleSet); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("referenced RuleSet is not available")
+		}
+		return &transientError{err: err}
+	}
+	if !sameRuleSetAcceptanceView(ruleset, &cachedRuleSet) || !sameRuleSetAcceptanceView(ruleset, &liveRuleSet) {
+		return fmt.Errorf("%w: RuleSet changed during reconstruction", errRuleSetInputsChanged)
+	}
+
+	cachedInputs, err := loadRuleSetInputView(ctx, r.Client, &cachedRuleSet, false)
+	if err != nil {
+		return publicationInputReadError(err)
+	}
+	if !inputs.sameState(cachedInputs) {
+		return fmt.Errorf("%w: RuleSet inputs changed during reconstruction", errRuleSetInputsChanged)
+	}
 	return nil
 }
 
@@ -354,7 +440,11 @@ func (r *PublicationReconciler) remember(
 	if r.states == nil {
 		r.states = make(map[types.NamespacedName]*publicationState)
 	}
-	r.states[key] = &publicationState{fingerprint: fingerprint, acceptedVersion: acceptedVersion, engineUID: engineUID}
+	r.states[key] = &publicationState{
+		fingerprint:     fingerprint,
+		acceptedVersion: acceptedVersion,
+		engineUID:       engineUID,
+	}
 }
 
 // clearMismatch keeps the coalescing fingerprint after a successful publish,
